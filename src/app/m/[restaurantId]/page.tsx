@@ -36,6 +36,14 @@ function formatBRL(cents: number) {
   });
 }
 
+function safeJsonParse(text: string) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 export default function MenuPage() {
   const params = useParams<{ restaurantId: string }>();
   const restaurantId = params?.restaurantId;
@@ -67,8 +75,14 @@ export default function MenuPage() {
       try {
         setLoadingRestaurant(true);
 
-        const res = await fetch(`${API_URL}/restaurants/${restaurantId}`);
-        const data = await res.json();
+        const url = `${API_URL}/restaurants/${restaurantId}`;
+        console.log("[Restaurant] GET:", url);
+
+        const res = await fetch(url);
+        const text = await res.text();
+
+        console.log("[Restaurant] STATUS:", res.status);
+        console.log("[Restaurant] BODY:", text);
 
         if (!active) return;
 
@@ -77,9 +91,10 @@ export default function MenuPage() {
           return;
         }
 
+        const data = safeJsonParse(text);
         setRestaurant(data);
       } catch (e) {
-        console.error(e);
+        console.error("[Restaurant] ERROR:", e);
         if (!active) return;
         setRestaurant(null);
       } finally {
@@ -103,13 +118,27 @@ export default function MenuPage() {
     async function loadProducts() {
       try {
         setLoadingProducts(true);
-        const res = await fetch(`${API_URL}/restaurants/${restaurantId}/products`);
-        const data = await res.json();
+
+        const url = `${API_URL}/restaurants/${restaurantId}/products`;
+        console.log("[Products] GET:", url);
+
+        const res = await fetch(url);
+        const text = await res.text();
+
+        console.log("[Products] STATUS:", res.status);
+        console.log("[Products] BODY:", text);
+
         if (!active) return;
 
+        if (!res.ok) {
+          setProducts([]);
+          return;
+        }
+
+        const data = safeJsonParse(text);
         setProducts(Array.isArray(data) ? data : []);
       } catch (e) {
-        console.error(e);
+        console.error("[Products] ERROR:", e);
         if (!active) return;
         setProducts([]);
       } finally {
@@ -208,16 +237,24 @@ export default function MenuPage() {
         })),
       };
 
-      const res = await fetch(`${API_URL}/public/orders`, {
+      const url = `${API_URL}/public/orders`;
+      console.log("[Order] POST:", url);
+      console.log("[Order] payload:", payload);
+
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
+      const text = await res.text();
+      console.log("[Order] STATUS:", res.status);
+      console.log("[Order] BODY:", text);
+
+      const data = safeJsonParse(text);
 
       if (!res.ok) {
-        setResultMsg(data?.error || "Erro ao finalizar pedido.");
+        setResultMsg((data as any)?.error || "Erro ao finalizar pedido.");
         return;
       }
 
@@ -225,9 +262,9 @@ export default function MenuPage() {
       setCustomerName("");
       setCustomerPhone("");
       setDeliveryAddress("");
-      setResultMsg(`Pedido enviado ✅ Nº ${data.id}`);
+      setResultMsg(`Pedido enviado ✅ Nº ${(data as any)?.id || "OK"}`);
     } catch (e) {
-      console.error(e);
+      console.error("[Order] ERROR:", e);
       setResultMsg("Erro de conexão ao enviar pedido.");
     } finally {
       setSubmitting(false);
@@ -242,7 +279,9 @@ export default function MenuPage() {
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <h1 className="text-xl font-bold tracking-tight truncate">
-                {loadingRestaurant ? "Carregando..." : restaurant?.name || "Cardápio"}
+                {loadingRestaurant
+                  ? "Carregando..."
+                  : restaurant?.name || "Cardápio"}
               </h1>
 
               <p className="text-sm text-zinc-600 mt-1">
