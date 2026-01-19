@@ -7,3 +7,4 @@ type Props = {
 export default function RestaurantRedirectPage({ params }: Props) {
   redirect(`/m/${params.restaurantId}`);
 }
+
