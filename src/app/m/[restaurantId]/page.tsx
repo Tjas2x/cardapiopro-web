@@ -1,6 +1,4 @@
-"use client";
-
-import { useEffect, useMemo, useState } from "react";
+import { notFound } from "next/navigation";
 
 type Restaurant = {
   id: string;
@@ -21,13 +19,6 @@ type Product = {
   restaurantId: string;
 };
 
-type CartItem = {
-  productId: string;
-  name: string;
-  unitPriceCents: number;
-  quantity: number;
-};
-
 function formatBRL(cents: number) {
   return (cents / 100).toLocaleString("pt-BR", {
     style: "currency",
@@ -35,267 +26,33 @@ function formatBRL(cents: number) {
   });
 }
 
-function safeJsonParse(text: string) {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
-async function fetchWithTimeout(url: string, ms = 12000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-
-  try {
-    const res = await fetch(url, { signal: controller.signal });
-    return res;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 type Props = {
   params: { restaurantId: string };
 };
 
-export default function MenuPage({ params }: Props) {
+export default async function MenuPage({ params }: Props) {
   const restaurantId = params?.restaurantId;
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
-  const [restaurant, setRestaurant] = useState<Restaurant | null>(null);
-  const [loadingRestaurant, setLoadingRestaurant] = useState(true);
-  const [restaurantError, setRestaurantError] = useState<string | null>(null);
+  if (!restaurantId) notFound();
 
-  const [products, setProducts] = useState<Product[]>([]);
-  const [loadingProducts, setLoadingProducts] = useState(true);
-  const [productsError, setProductsError] = useState<string | null>(null);
+  const restaurantRes = await fetch(`${API_URL}/restaurants/${restaurantId}`, {
+    cache: "no-store",
+  });
 
-  const [cart, setCart] = useState<CartItem[]>([]);
-
-  const [customerName, setCustomerName] = useState("");
-  const [customerPhone, setCustomerPhone] = useState("");
-  const [deliveryAddress, setDeliveryAddress] = useState("");
-
-  const [submitting, setSubmitting] = useState(false);
-  const [resultMsg, setResultMsg] = useState<string | null>(null);
-
-  // ✅ Buscar restaurante
-  useEffect(() => {
-    if (!restaurantId) return;
-
-    let active = true;
-
-    async function loadRestaurant() {
-      try {
-        setLoadingRestaurant(true);
-        setRestaurantError(null);
-
-        const url = `${API_URL}/restaurants/${restaurantId}`;
-        const res = await fetchWithTimeout(url, 12000);
-        const text = await res.text();
-
-        if (!active) return;
-
-        if (!res.ok) {
-          const data = safeJsonParse(text);
-          setRestaurant(null);
-          setRestaurantError((data as any)?.error || `Erro HTTP ${res.status}`);
-          return;
-        }
-
-        const data = safeJsonParse(text);
-        setRestaurant(data);
-      } catch (e: any) {
-        if (!active) return;
-        setRestaurant(null);
-
-        if (e?.name === "AbortError") {
-          setRestaurantError(
-            "Tempo esgotado ao buscar restaurante (backend lento)."
-          );
-        } else {
-          setRestaurantError("Falha ao buscar restaurante (erro de rede/CORS).");
-        }
-      } finally {
-        if (!active) return;
-        setLoadingRestaurant(false);
-      }
-    }
-
-    loadRestaurant();
-    return () => {
-      active = false;
-    };
-  }, [API_URL, restaurantId]);
-
-  // ✅ Buscar produtos
-  useEffect(() => {
-    if (!restaurantId) return;
-
-    let active = true;
-
-    async function loadProducts() {
-      try {
-        setLoadingProducts(true);
-        setProductsError(null);
-
-        const url = `${API_URL}/restaurants/${restaurantId}/products`;
-        const res = await fetchWithTimeout(url, 12000);
-        const text = await res.text();
-
-        if (!active) return;
-
-        if (!res.ok) {
-          const data = safeJsonParse(text);
-          setProducts([]);
-          setProductsError((data as any)?.error || `Erro HTTP ${res.status}`);
-          return;
-        }
-
-        const data = safeJsonParse(text);
-        setProducts(Array.isArray(data) ? data : []);
-      } catch (e: any) {
-        if (!active) return;
-        setProducts([]);
-
-        if (e?.name === "AbortError") {
-          setProductsError("Tempo esgotado ao buscar produtos (backend lento).");
-        } else {
-          setProductsError("Falha ao buscar produtos (erro de rede/CORS).");
-        }
-      } finally {
-        if (!active) return;
-        setLoadingProducts(false);
-      }
-    }
-
-    loadProducts();
-    return () => {
-      active = false;
-    };
-  }, [API_URL, restaurantId]);
-
-  const totalCents = useMemo(() => {
-    return cart.reduce((acc, i) => acc + i.unitPriceCents * i.quantity, 0);
-  }, [cart]);
-
-  const totalItems = useMemo(() => {
-    return cart.reduce((acc, i) => acc + i.quantity, 0);
-  }, [cart]);
-
-  function addProduct(p: Product) {
-    setResultMsg(null);
-    setCart((prev) => {
-      const idx = prev.findIndex((x) => x.productId === p.id);
-      if (idx >= 0) {
-        const copy = [...prev];
-        copy[idx] = { ...copy[idx], quantity: copy[idx].quantity + 1 };
-        return copy;
-      }
-      return [
-        ...prev,
-        {
-          productId: p.id,
-          name: p.name,
-          unitPriceCents: p.priceCents,
-          quantity: 1,
-        },
-      ];
-    });
+  if (!restaurantRes.ok) {
+    notFound();
   }
 
-  function removeProduct(productId: string) {
-    setResultMsg(null);
-    setCart((prev) => {
-      const idx = prev.findIndex((x) => x.productId === productId);
-      if (idx < 0) return prev;
+  const restaurant: Restaurant = await restaurantRes.json();
 
-      const item = prev[idx];
-      if (item.quantity <= 1) {
-        return prev.filter((x) => x.productId !== productId);
-      }
+  const productsRes = await fetch(
+    `${API_URL}/restaurants/${restaurantId}/products`,
+    { cache: "no-store" }
+  );
 
-      const copy = [...prev];
-      copy[idx] = { ...copy[idx], quantity: copy[idx].quantity - 1 };
-      return copy;
-    });
-  }
-
-  async function finalizeOrder() {
-    setResultMsg(null);
-
-    if (!restaurantId) {
-      setResultMsg("Restaurante inválido.");
-      return;
-    }
-
-    if (!customerName.trim()) {
-      setResultMsg("Informe seu nome.");
-      return;
-    }
-    if (!customerPhone.trim()) {
-      setResultMsg("Informe seu telefone.");
-      return;
-    }
-    if (!deliveryAddress.trim()) {
-      setResultMsg("Informe o endereço.");
-      return;
-    }
-    if (cart.length === 0) {
-      setResultMsg("Carrinho vazio.");
-      return;
-    }
-
-    setSubmitting(true);
-    try {
-      const payload = {
-        restaurantId,
-        customerName: customerName.trim(),
-        customerPhone: customerPhone.trim(),
-        deliveryAddress: deliveryAddress.trim(),
-        items: cart.map((i) => ({
-          productId: i.productId,
-          quantity: i.quantity,
-        })),
-      };
-
-      const url = `${API_URL}/public/orders`;
-
-      const res = await fetchWithTimeout(url, 12000);
-      // ⚠️ fetchWithTimeout acima só faz GET/HEAD por padrão, então aqui precisamos do fetch normal:
-      // (vamos manter o fetch normal para POST)
-
-      const resPost = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      const text = await resPost.text();
-      const data = safeJsonParse(text);
-
-      if (!resPost.ok) {
-        setResultMsg((data as any)?.error || "Erro ao finalizar pedido.");
-        return;
-      }
-
-      setCart([]);
-      setCustomerName("");
-      setCustomerPhone("");
-      setDeliveryAddress("");
-      setResultMsg(`Pedido enviado ✅ Nº ${(data as any)?.id || "OK"}`);
-    } catch (e: any) {
-      if (e?.name === "AbortError") {
-        setResultMsg("Tempo esgotado ao enviar pedido (backend lento).");
-      } else {
-        setResultMsg("Erro de conexão ao enviar pedido.");
-      }
-    } finally {
-      setSubmitting(false);
-    }
-  }
+  const products: Product[] = productsRes.ok ? await productsRes.json() : [];
 
   return (
     <div className="min-h-screen bg-zinc-100">
@@ -305,29 +62,23 @@ export default function MenuPage({ params }: Props) {
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <h1 className="text-xl font-bold tracking-tight truncate">
-                {loadingRestaurant
-                  ? "Carregando..."
-                  : restaurant?.name || "Cardápio"}
+                {restaurant?.name || "Cardápio"}
               </h1>
 
               <p className="text-sm text-zinc-600 mt-1">
-                {loadingRestaurant
-                  ? "Carregando restaurante..."
-                  : restaurant?.description || "Faça seu pedido abaixo 👇"}
+                {restaurant?.description || "Faça seu pedido abaixo 👇"}
               </p>
 
               <div className="mt-2 flex items-center gap-2 flex-wrap">
-                {restaurant ? (
-                  <span
-                    className={`text-xs px-2 py-1 rounded-full font-semibold ${
-                      restaurant.isOpen
-                        ? "bg-green-100 text-green-700"
-                        : "bg-red-100 text-red-700"
-                    }`}
-                  >
-                    {restaurant.isOpen ? "Aberto" : "Fechado"}
-                  </span>
-                ) : null}
+                <span
+                  className={`text-xs px-2 py-1 rounded-full font-semibold ${
+                    restaurant.isOpen
+                      ? "bg-green-100 text-green-700"
+                      : "bg-red-100 text-red-700"
+                  }`}
+                >
+                  {restaurant.isOpen ? "Aberto" : "Fechado"}
+                </span>
 
                 {restaurant?.address ? (
                   <span className="text-xs px-2 py-1 rounded-full bg-zinc-100 text-zinc-700">
@@ -338,7 +89,7 @@ export default function MenuPage({ params }: Props) {
             </div>
 
             <div className="shrink-0 rounded-full bg-black text-white text-xs px-3 py-1 font-semibold">
-              {totalItems} item(ns)
+              {products?.length || 0} produto(s)
             </div>
           </div>
         </div>
@@ -350,168 +101,63 @@ export default function MenuPage({ params }: Props) {
         <section>
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-lg font-bold">Produtos</h2>
-            {loadingProducts ? (
-              <span className="text-sm text-zinc-500">Carregando...</span>
-            ) : null}
           </div>
 
-          {restaurantError ? (
-            <div className="rounded-2xl border bg-white p-4 text-sm text-red-600">
-              {restaurantError}
-            </div>
-          ) : null}
-
-          {productsError ? (
-            <div className="rounded-2xl border bg-white p-4 text-sm text-red-600">
-              {productsError}
-            </div>
-          ) : null}
-
-          {!restaurantId ? (
-            <div className="rounded-2xl border bg-white p-4 text-sm text-zinc-600">
-              Carregando loja...
-            </div>
-          ) : products.length === 0 && !loadingProducts ? (
+          {products.length === 0 ? (
             <div className="rounded-2xl border bg-white p-4 text-sm text-zinc-600">
               Nenhum produto encontrado.
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-3">
-              {products.map((p) => {
-                const cartItem = cart.find((x) => x.productId === p.id);
-                const qty = cartItem?.quantity ?? 0;
+              {products.map((p) => (
+                <div
+                  key={p.id}
+                  className="rounded-2xl border bg-white p-4 shadow-sm"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h3 className="font-semibold text-zinc-900 truncate">
+                        {p.name}
+                      </h3>
 
-                return (
-                  <div
-                    key={p.id}
-                    className="rounded-2xl border bg-white p-4 shadow-sm"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h3 className="font-semibold text-zinc-900 truncate">
-                          {p.name}
-                        </h3>
-
-                        {p.description ? (
-                          <p className="text-sm text-zinc-600 mt-1 leading-snug">
-                            {p.description}
-                          </p>
-                        ) : null}
-
-                        <p className="mt-2 text-sm font-bold text-zinc-900">
-                          {formatBRL(p.priceCents)}
+                      {p.description ? (
+                        <p className="text-sm text-zinc-600 mt-1 leading-snug">
+                          {p.description}
                         </p>
+                      ) : null}
 
-                        {qty > 0 ? (
-                          <p className="mt-1 text-xs text-zinc-500">
-                            No carrinho:{" "}
-                            <span className="font-semibold">{qty}</span>
-                          </p>
-                        ) : null}
-                      </div>
+                      <p className="mt-2 text-sm font-bold text-zinc-900">
+                        {formatBRL(p.priceCents)}
+                      </p>
 
-                      <div className="flex flex-col items-end gap-2 shrink-0">
-                        <button
-                          onClick={() => addProduct(p)}
-                          disabled={!p.active}
-                          className="rounded-xl px-4 py-2 text-sm font-semibold bg-black text-white disabled:bg-zinc-300"
-                        >
-                          Adicionar
-                        </button>
-
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => removeProduct(p.id)}
-                            disabled={!p.active || qty === 0}
-                            className="h-9 w-9 rounded-xl border font-bold disabled:opacity-40"
-                          >
-                            –
-                          </button>
-
-                          <div className="w-8 text-center font-semibold">
-                            {qty}
-                          </div>
-
-                          <button
-                            onClick={() => addProduct(p)}
-                            disabled={!p.active}
-                            className="h-9 w-9 rounded-xl border font-bold disabled:opacity-40"
-                          >
-                            +
-                          </button>
-                        </div>
-                      </div>
+                      {!p.active ? (
+                        <p className="mt-1 text-xs text-zinc-500">Indisponível</p>
+                      ) : null}
                     </div>
+
+                    <button
+                      disabled
+                      className="rounded-xl px-4 py-2 text-sm font-semibold bg-zinc-200 text-zinc-500 cursor-not-allowed"
+                      title="Checkout será ativado depois"
+                    >
+                      Adicionar
+                    </button>
                   </div>
-                );
-              })}
+                </div>
+              ))}
             </div>
           )}
         </section>
 
-        {/* Checkout */}
+        {/* Checkout (placeholder) */}
         <section className="rounded-2xl border bg-white p-4 shadow-sm space-y-3">
           <h2 className="text-lg font-bold">Seus dados</h2>
 
-          <div className="grid grid-cols-1 gap-3">
-            <input
-              value={customerName}
-              onChange={(e) => setCustomerName(e.target.value)}
-              placeholder="Seu nome"
-              className="border rounded-xl px-3 py-3 outline-none focus:ring-2 focus:ring-black"
-            />
-
-            <input
-              value={customerPhone}
-              onChange={(e) => setCustomerPhone(e.target.value)}
-              placeholder="Telefone (WhatsApp)"
-              className="border rounded-xl px-3 py-3 outline-none focus:ring-2 focus:ring-black"
-            />
-
-            <input
-              value={deliveryAddress}
-              onChange={(e) => setDeliveryAddress(e.target.value)}
-              placeholder="Endereço para entrega"
-              className="border rounded-xl px-3 py-3 outline-none focus:ring-2 focus:ring-black"
-            />
+          <div className="rounded-xl bg-zinc-100 border p-3 text-sm text-zinc-600">
+            Checkout será ativado em seguida (quando conectarmos pedidos + carrinho no client).
           </div>
-
-          {resultMsg ? (
-            <div className="text-sm text-zinc-700 bg-zinc-100 border rounded-xl p-3">
-              {resultMsg}
-            </div>
-          ) : null}
-
-          <button
-            onClick={finalizeOrder}
-            disabled={submitting || !restaurantId}
-            className="w-full rounded-xl px-4 py-3 font-semibold bg-black text-white disabled:bg-zinc-300"
-          >
-            {submitting ? "Enviando..." : "Finalizar pedido"}
-          </button>
-
-          <p className="text-xs text-zinc-500">
-            Ao finalizar, seu pedido será enviado direto para o restaurante.
-          </p>
         </section>
       </main>
-
-      {/* Barra inferior */}
-      <footer className="fixed bottom-0 left-0 right-0 border-t bg-white">
-        <div className="mx-auto max-w-3xl px-4 py-3 flex items-center justify-between gap-4">
-          <div>
-            <div className="text-xs text-zinc-500">Total</div>
-            <div className="text-lg font-bold">{formatBRL(totalCents)}</div>
-          </div>
-
-          <button
-            onClick={() => setCart([])}
-            className="rounded-xl px-4 py-2 border font-semibold"
-          >
-            Limpar carrinho
-          </button>
-        </div>
-      </footer>
     </div>
   );
 }
