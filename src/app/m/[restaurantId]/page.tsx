@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
 
 type Restaurant = {
   id: string;
@@ -44,8 +43,11 @@ function safeJsonParse(text: string) {
   }
 }
 
-export default function MenuPage() {
-  const params = useParams<{ restaurantId: string }>();
+type Props = {
+  params: { restaurantId: string };
+};
+
+export default function MenuPage({ params }: Props) {
   const restaurantId = params?.restaurantId;
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
@@ -65,10 +67,6 @@ export default function MenuPage() {
   const [submitting, setSubmitting] = useState(false);
   const [resultMsg, setResultMsg] = useState<string | null>(null);
 
-  // ✅ Debug na tela (pra não depender de console)
-  const [debugRestaurant, setDebugRestaurant] = useState<string>("");
-  const [debugProducts, setDebugProducts] = useState<string>("");
-
   // ✅ Buscar restaurante
   useEffect(() => {
     if (!restaurantId) return;
@@ -80,13 +78,8 @@ export default function MenuPage() {
         setLoadingRestaurant(true);
 
         const url = `${API_URL}/restaurants/${restaurantId}`;
-
         const res = await fetch(url);
         const text = await res.text();
-
-        setDebugRestaurant(
-          `GET ${url}\nSTATUS ${res.status}\nBODY ${text.slice(0, 300)}`
-        );
 
         if (!active) return;
 
@@ -97,8 +90,7 @@ export default function MenuPage() {
 
         const data = safeJsonParse(text);
         setRestaurant(data);
-      } catch (e: any) {
-        setDebugRestaurant(`ERROR: ${e?.message || String(e)}`);
+      } catch {
         if (!active) return;
         setRestaurant(null);
       } finally {
@@ -124,13 +116,8 @@ export default function MenuPage() {
         setLoadingProducts(true);
 
         const url = `${API_URL}/restaurants/${restaurantId}/products`;
-
         const res = await fetch(url);
         const text = await res.text();
-
-        setDebugProducts(
-          `GET ${url}\nSTATUS ${res.status}\nBODY ${text.slice(0, 300)}`
-        );
 
         if (!active) return;
 
@@ -141,8 +128,7 @@ export default function MenuPage() {
 
         const data = safeJsonParse(text);
         setProducts(Array.isArray(data) ? data : []);
-      } catch (e: any) {
-        setDebugProducts(`ERROR: ${e?.message || String(e)}`);
+      } catch {
         if (!active) return;
         setProducts([]);
       } finally {
@@ -262,7 +248,7 @@ export default function MenuPage() {
       setCustomerPhone("");
       setDeliveryAddress("");
       setResultMsg(`Pedido enviado ✅ Nº ${(data as any)?.id || "OK"}`);
-    } catch (e) {
+    } catch {
       setResultMsg("Erro de conexão ao enviar pedido.");
     } finally {
       setSubmitting(false);
@@ -318,33 +304,6 @@ export default function MenuPage() {
 
       {/* Conteúdo */}
       <main className="mx-auto max-w-3xl px-4 py-6 space-y-6 pb-32">
-        {/* DEBUG NA TELA */}
-        <section className="rounded-2xl border bg-white p-4 text-xs text-zinc-700 whitespace-pre-wrap">
-          <div className="font-bold">DEBUG</div>
-          <div>
-            <b>restaurantId:</b> {String(restaurantId)}
-          </div>
-          <div>
-            <b>API_URL:</b> {API_URL}
-          </div>
-          <div>
-            <b>products.length:</b> {products.length}
-          </div>
-          <div>
-            <b>loadingProducts:</b> {String(loadingProducts)}
-          </div>
-
-          <div className="mt-3">
-            <b>Restaurant fetch:</b>
-            <div>{debugRestaurant || "(vazio)"}</div>
-          </div>
-
-          <div className="mt-3">
-            <b>Products fetch:</b>
-            <div>{debugProducts || "(vazio)"}</div>
-          </div>
-        </section>
-
         {/* Produtos */}
         <section>
           <div className="flex items-center justify-between mb-3">
@@ -502,5 +461,3 @@ export default function MenuPage() {
     </div>
   );
 }
-
-// DEBUG-MARK: 2026-01-19 08:08:10
