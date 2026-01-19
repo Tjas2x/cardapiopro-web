@@ -43,6 +43,18 @@ function safeJsonParse(text: string) {
   }
 }
 
+async function fetchWithTimeout(url: string, ms = 12000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    return res;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 type Props = {
   params: { restaurantId: string };
 };
@@ -54,9 +66,11 @@ export default function MenuPage({ params }: Props) {
 
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null);
   const [loadingRestaurant, setLoadingRestaurant] = useState(true);
+  const [restaurantError, setRestaurantError] = useState<string | null>(null);
 
   const [products, setProducts] = useState<Product[]>([]);
   const [loadingProducts, setLoadingProducts] = useState(true);
+  const [productsError, setProductsError] = useState<string | null>(null);
 
   const [cart, setCart] = useState<CartItem[]>([]);
 
@@ -76,23 +90,34 @@ export default function MenuPage({ params }: Props) {
     async function loadRestaurant() {
       try {
         setLoadingRestaurant(true);
+        setRestaurantError(null);
 
         const url = `${API_URL}/restaurants/${restaurantId}`;
-        const res = await fetch(url);
+        const res = await fetchWithTimeout(url, 12000);
         const text = await res.text();
 
         if (!active) return;
 
         if (!res.ok) {
+          const data = safeJsonParse(text);
           setRestaurant(null);
+          setRestaurantError((data as any)?.error || `Erro HTTP ${res.status}`);
           return;
         }
 
         const data = safeJsonParse(text);
         setRestaurant(data);
-      } catch {
+      } catch (e: any) {
         if (!active) return;
         setRestaurant(null);
+
+        if (e?.name === "AbortError") {
+          setRestaurantError(
+            "Tempo esgotado ao buscar restaurante (backend lento)."
+          );
+        } else {
+          setRestaurantError("Falha ao buscar restaurante (erro de rede/CORS).");
+        }
       } finally {
         if (!active) return;
         setLoadingRestaurant(false);
@@ -114,23 +139,32 @@ export default function MenuPage({ params }: Props) {
     async function loadProducts() {
       try {
         setLoadingProducts(true);
+        setProductsError(null);
 
         const url = `${API_URL}/restaurants/${restaurantId}/products`;
-        const res = await fetch(url);
+        const res = await fetchWithTimeout(url, 12000);
         const text = await res.text();
 
         if (!active) return;
 
         if (!res.ok) {
+          const data = safeJsonParse(text);
           setProducts([]);
+          setProductsError((data as any)?.error || `Erro HTTP ${res.status}`);
           return;
         }
 
         const data = safeJsonParse(text);
         setProducts(Array.isArray(data) ? data : []);
-      } catch {
+      } catch (e: any) {
         if (!active) return;
         setProducts([]);
+
+        if (e?.name === "AbortError") {
+          setProductsError("Tempo esgotado ao buscar produtos (backend lento).");
+        } else {
+          setProductsError("Falha ao buscar produtos (erro de rede/CORS).");
+        }
       } finally {
         if (!active) return;
         setLoadingProducts(false);
@@ -229,16 +263,20 @@ export default function MenuPage({ params }: Props) {
 
       const url = `${API_URL}/public/orders`;
 
-      const res = await fetch(url, {
+      const res = await fetchWithTimeout(url, 12000);
+      // ⚠️ fetchWithTimeout acima só faz GET/HEAD por padrão, então aqui precisamos do fetch normal:
+      // (vamos manter o fetch normal para POST)
+
+      const resPost = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
 
-      const text = await res.text();
+      const text = await resPost.text();
       const data = safeJsonParse(text);
 
-      if (!res.ok) {
+      if (!resPost.ok) {
         setResultMsg((data as any)?.error || "Erro ao finalizar pedido.");
         return;
       }
@@ -248,8 +286,12 @@ export default function MenuPage({ params }: Props) {
       setCustomerPhone("");
       setDeliveryAddress("");
       setResultMsg(`Pedido enviado ✅ Nº ${(data as any)?.id || "OK"}`);
-    } catch {
-      setResultMsg("Erro de conexão ao enviar pedido.");
+    } catch (e: any) {
+      if (e?.name === "AbortError") {
+        setResultMsg("Tempo esgotado ao enviar pedido (backend lento).");
+      } else {
+        setResultMsg("Erro de conexão ao enviar pedido.");
+      }
     } finally {
       setSubmitting(false);
     }
@@ -312,6 +354,18 @@ export default function MenuPage({ params }: Props) {
               <span className="text-sm text-zinc-500">Carregando...</span>
             ) : null}
           </div>
+
+          {restaurantError ? (
+            <div className="rounded-2xl border bg-white p-4 text-sm text-red-600">
+              {restaurantError}
+            </div>
+          ) : null}
+
+          {productsError ? (
+            <div className="rounded-2xl border bg-white p-4 text-sm text-red-600">
+              {productsError}
+            </div>
+          ) : null}
 
           {!restaurantId ? (
             <div className="rounded-2xl border bg-white p-4 text-sm text-zinc-600">
