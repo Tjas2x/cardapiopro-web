@@ -65,6 +65,10 @@ export default function MenuPage() {
   const [submitting, setSubmitting] = useState(false);
   const [resultMsg, setResultMsg] = useState<string | null>(null);
 
+  // ✅ Debug na tela (pra não depender de console)
+  const [debugRestaurant, setDebugRestaurant] = useState<string>("");
+  const [debugProducts, setDebugProducts] = useState<string>("");
+
   // ✅ Buscar restaurante
   useEffect(() => {
     if (!restaurantId) return;
@@ -76,13 +80,13 @@ export default function MenuPage() {
         setLoadingRestaurant(true);
 
         const url = `${API_URL}/restaurants/${restaurantId}`;
-        console.log("[Restaurant] GET:", url);
 
         const res = await fetch(url);
         const text = await res.text();
 
-        console.log("[Restaurant] STATUS:", res.status);
-        console.log("[Restaurant] BODY:", text);
+        setDebugRestaurant(
+          `GET ${url}\nSTATUS ${res.status}\nBODY ${text.slice(0, 300)}`
+        );
 
         if (!active) return;
 
@@ -93,8 +97,8 @@ export default function MenuPage() {
 
         const data = safeJsonParse(text);
         setRestaurant(data);
-      } catch (e) {
-        console.error("[Restaurant] ERROR:", e);
+      } catch (e: any) {
+        setDebugRestaurant(`ERROR: ${e?.message || String(e)}`);
         if (!active) return;
         setRestaurant(null);
       } finally {
@@ -120,13 +124,13 @@ export default function MenuPage() {
         setLoadingProducts(true);
 
         const url = `${API_URL}/restaurants/${restaurantId}/products`;
-        console.log("[Products] GET:", url);
 
         const res = await fetch(url);
         const text = await res.text();
 
-        console.log("[Products] STATUS:", res.status);
-        console.log("[Products] BODY:", text);
+        setDebugProducts(
+          `GET ${url}\nSTATUS ${res.status}\nBODY ${text.slice(0, 300)}`
+        );
 
         if (!active) return;
 
@@ -137,8 +141,8 @@ export default function MenuPage() {
 
         const data = safeJsonParse(text);
         setProducts(Array.isArray(data) ? data : []);
-      } catch (e) {
-        console.error("[Products] ERROR:", e);
+      } catch (e: any) {
+        setDebugProducts(`ERROR: ${e?.message || String(e)}`);
         if (!active) return;
         setProducts([]);
       } finally {
@@ -238,8 +242,6 @@ export default function MenuPage() {
       };
 
       const url = `${API_URL}/public/orders`;
-      console.log("[Order] POST:", url);
-      console.log("[Order] payload:", payload);
 
       const res = await fetch(url, {
         method: "POST",
@@ -248,9 +250,6 @@ export default function MenuPage() {
       });
 
       const text = await res.text();
-      console.log("[Order] STATUS:", res.status);
-      console.log("[Order] BODY:", text);
-
       const data = safeJsonParse(text);
 
       if (!res.ok) {
@@ -264,7 +263,6 @@ export default function MenuPage() {
       setDeliveryAddress("");
       setResultMsg(`Pedido enviado ✅ Nº ${(data as any)?.id || "OK"}`);
     } catch (e) {
-      console.error("[Order] ERROR:", e);
       setResultMsg("Erro de conexão ao enviar pedido.");
     } finally {
       setSubmitting(false);
@@ -320,6 +318,33 @@ export default function MenuPage() {
 
       {/* Conteúdo */}
       <main className="mx-auto max-w-3xl px-4 py-6 space-y-6 pb-32">
+        {/* DEBUG NA TELA */}
+        <section className="rounded-2xl border bg-white p-4 text-xs text-zinc-700 whitespace-pre-wrap">
+          <div className="font-bold">DEBUG</div>
+          <div>
+            <b>restaurantId:</b> {String(restaurantId)}
+          </div>
+          <div>
+            <b>API_URL:</b> {API_URL}
+          </div>
+          <div>
+            <b>products.length:</b> {products.length}
+          </div>
+          <div>
+            <b>loadingProducts:</b> {String(loadingProducts)}
+          </div>
+
+          <div className="mt-3">
+            <b>Restaurant fetch:</b>
+            <div>{debugRestaurant || "(vazio)"}</div>
+          </div>
+
+          <div className="mt-3">
+            <b>Products fetch:</b>
+            <div>{debugProducts || "(vazio)"}</div>
+          </div>
+        </section>
+
         {/* Produtos */}
         <section>
           <div className="flex items-center justify-between mb-3">
