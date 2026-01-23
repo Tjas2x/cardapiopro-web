@@ -46,6 +46,7 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [cart, setCart] = useState<Record<string, CartItem>>({});
+
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerAddress, setCustomerAddress] = useState("");
@@ -56,6 +57,11 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
   );
   const toastTimer = useRef<NodeJS.Timeout | null>(null);
 
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<"ALL" | "ACTIVE" | "INACTIVE">("ALL");
+
+  const [cartOpen, setCartOpen] = useState(false);
+
   function showToast(type: ToastType, msg: string) {
     setToast({ type, msg });
 
@@ -64,10 +70,14 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
     toastTimer.current = setTimeout(() => {
       setToast(null);
       toastTimer.current = null;
-    }, 3500);
+    }, 3000);
   }
 
   const cartItems = useMemo(() => Object.values(cart), [cart]);
+
+  const totalItems = useMemo(() => {
+    return cartItems.reduce((acc, item) => acc + item.qty, 0);
+  }, [cartItems]);
 
   const totalCents = useMemo(() => {
     return cartItems.reduce(
@@ -75,6 +85,23 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
       0
     );
   }, [cartItems]);
+
+  const filteredProducts = useMemo(() => {
+    const q = search.trim().toLowerCase();
+
+    return products
+      .filter((p) => {
+        if (filter === "ACTIVE") return p.active;
+        if (filter === "INACTIVE") return !p.active;
+        return true;
+      })
+      .filter((p) => {
+        if (!q) return true;
+        const inName = p.name.toLowerCase().includes(q);
+        const inDesc = (p.description || "").toLowerCase().includes(q);
+        return inName || inDesc;
+      });
+  }, [products, search, filter]);
 
   async function loadMenu() {
     try {
@@ -142,6 +169,10 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
         [p.id]: { product: p, qty: nextQty },
       };
     });
+  }
+
+  function clearCart() {
+    setCart({});
   }
 
   async function postWithRetry(url: string, body: any, tries = 2) {
@@ -230,10 +261,11 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
 
       showToast("success", "Pedido enviado com sucesso ✅");
 
-      setCart({});
+      clearCart();
       setCustomerName("");
       setCustomerPhone("");
       setCustomerAddress("");
+      setCartOpen(false);
     } catch (e: any) {
       showToast("error", e?.message || "Falha ao finalizar pedido.");
     } finally {
@@ -243,32 +275,49 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
 
   if (loading) {
     return (
-      <main style={{ padding: 24 }}>
-        <h1>Carregando cardápio...</h1>
-        <p style={{ marginTop: 8, opacity: 0.8 }}>
-          Carregando restaurante e produtos...
-        </p>
+      <main className="min-h-screen bg-zinc-100 px-4 py-8">
+        <div className="mx-auto max-w-3xl">
+          <h1 className="text-xl font-extrabold">Carregando cardápio...</h1>
+          <p className="text-sm text-zinc-600 mt-2">
+            Buscando restaurante e produtos...
+          </p>
+
+          <div className="mt-6 space-y-3">
+            {[1, 2, 3, 4].map((n) => (
+              <div
+                key={n}
+                className="rounded-2xl border bg-white p-4 shadow-sm"
+              >
+                <div className="flex gap-3">
+                  <div className="w-[86px] h-[86px] rounded-xl bg-zinc-200 animate-pulse" />
+                  <div className="flex-1 space-y-2">
+                    <div className="h-4 w-2/3 bg-zinc-200 rounded animate-pulse" />
+                    <div className="h-3 w-full bg-zinc-200 rounded animate-pulse" />
+                    <div className="h-3 w-1/2 bg-zinc-200 rounded animate-pulse" />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </main>
     );
   }
 
   if (loadError || !restaurant) {
     return (
-      <main style={{ padding: 24 }}>
-        <h1>Não foi possível carregar</h1>
-        <p style={{ marginTop: 8 }}>{loadError}</p>
+      <main className="min-h-screen bg-zinc-100 px-4 py-8">
+        <div className="mx-auto max-w-3xl">
+          <h1 className="text-xl font-extrabold">Não foi possível carregar</h1>
+          <p className="text-sm text-zinc-700 mt-2">{loadError}</p>
 
-        <button
-          onClick={loadMenu}
-          style={{
-            marginTop: 12,
-            padding: "10px 14px",
-            borderRadius: 10,
-            border: "1px solid #ddd",
-          }}
-        >
-          Tentar novamente
-        </button>
+          <button
+            onClick={loadMenu}
+            className="mt-4 rounded-2xl px-4 py-3 text-sm font-bold border bg-white"
+          >
+            Tentar novamente
+          </button>
+        </div>
       </main>
     );
   }
@@ -292,11 +341,12 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
         </div>
       ) : null}
 
+      {/* Header */}
       <header className="sticky top-0 z-10 border-b bg-white/90 backdrop-blur">
         <div className="mx-auto max-w-3xl px-4 py-4">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <h1 className="text-xl font-bold tracking-tight truncate">
+              <h1 className="text-xl font-extrabold tracking-tight truncate">
                 {restaurant.name || "Cardápio"}
               </h1>
 
@@ -323,25 +373,73 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
               </div>
             </div>
 
-            <div className="shrink-0 rounded-full bg-black text-white text-xs px-3 py-1 font-semibold">
+            <div className="shrink-0 rounded-full bg-zinc-900 text-white text-xs px-3 py-1 font-semibold">
               {products.length} produto(s)
+            </div>
+          </div>
+
+          {/* Search + filters */}
+          <div className="mt-4 flex flex-col gap-2">
+            <input
+              className="w-full rounded-2xl border bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+              placeholder="Buscar produto..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+
+            <div className="flex gap-2">
+              <button
+                onClick={() => setFilter("ALL")}
+                className={`flex-1 rounded-2xl px-3 py-2 text-xs font-extrabold border ${
+                  filter === "ALL"
+                    ? "bg-zinc-900 text-white border-zinc-900"
+                    : "bg-white text-zinc-900"
+                }`}
+              >
+                Todos
+              </button>
+
+              <button
+                onClick={() => setFilter("ACTIVE")}
+                className={`flex-1 rounded-2xl px-3 py-2 text-xs font-extrabold border ${
+                  filter === "ACTIVE"
+                    ? "bg-zinc-900 text-white border-zinc-900"
+                    : "bg-white text-zinc-900"
+                }`}
+              >
+                Disponíveis
+              </button>
+
+              <button
+                onClick={() => setFilter("INACTIVE")}
+                className={`flex-1 rounded-2xl px-3 py-2 text-xs font-extrabold border ${
+                  filter === "INACTIVE"
+                    ? "bg-zinc-900 text-white border-zinc-900"
+                    : "bg-white text-zinc-900"
+                }`}
+              >
+                Indisponíveis
+              </button>
             </div>
           </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-3xl px-4 py-6 space-y-6 pb-40">
+      <main className="mx-auto max-w-3xl px-4 py-6 space-y-6 pb-44">
         {/* Produtos */}
         <section>
-          <h2 className="text-lg font-bold mb-3">Produtos</h2>
+          <div className="flex items-end justify-between mb-3">
+            <h2 className="text-lg font-extrabold">Produtos</h2>
+            <p className="text-xs text-zinc-600">{filteredProducts.length}</p>
+          </div>
 
-          {products.length === 0 ? (
+          {filteredProducts.length === 0 ? (
             <div className="rounded-2xl border bg-white p-4 text-sm text-zinc-600">
               Nenhum produto encontrado.
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-3">
-              {products.map((p) => {
+              {filteredProducts.map((p) => {
                 const inCartQty = cart[p.id]?.qty ?? 0;
 
                 return (
@@ -350,25 +448,33 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
                     className="rounded-2xl border bg-white p-4 shadow-sm"
                   >
                     <div className="flex items-start justify-between gap-3">
-                      {/* ✅ Thumb + infos */}
+                      {/* Thumb + infos */}
                       <div className="flex items-start gap-3 min-w-0 flex-1">
                         {p.imageUrl ? (
                           <img
                             src={p.imageUrl}
                             alt={p.name}
-                            className="w-[86px] h-[86px] rounded-xl object-cover border"
+                            className="w-[92px] h-[92px] rounded-2xl object-cover border"
                             loading="lazy"
                           />
                         ) : (
-                          <div className="w-[86px] h-[86px] rounded-xl border bg-zinc-50 flex items-center justify-center text-xs font-semibold text-zinc-500">
+                          <div className="w-[92px] h-[92px] rounded-2xl border bg-zinc-50 flex items-center justify-center text-xs font-semibold text-zinc-500">
                             Sem foto
                           </div>
                         )}
 
                         <div className="min-w-0 flex-1">
-                          <h3 className="font-semibold text-zinc-900 truncate">
-                            {p.name}
-                          </h3>
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-extrabold text-zinc-900 truncate">
+                              {p.name}
+                            </h3>
+
+                            {!p.active ? (
+                              <span className="text-[11px] px-2 py-1 rounded-full bg-zinc-100 text-zinc-700 font-bold">
+                                Indisponível
+                              </span>
+                            ) : null}
+                          </div>
 
                           {p.description ? (
                             <p className="text-sm text-zinc-600 mt-1 leading-snug line-clamp-2">
@@ -376,56 +482,51 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
                             </p>
                           ) : null}
 
-                          <p className="mt-2 text-sm font-bold text-zinc-900">
-                            {formatBRL(p.priceCents)}
-                          </p>
-
-                          {!p.active ? (
-                            <p className="mt-1 text-xs text-zinc-500">
-                              Indisponível
+                          <div className="mt-3 flex items-center justify-between">
+                            <p className="text-base font-extrabold text-zinc-900">
+                              {formatBRL(p.priceCents)}
                             </p>
-                          ) : null}
+
+                            {p.active ? (
+                              inCartQty === 0 ? (
+                                <button
+                                  onClick={() => addProduct(p)}
+                                  className="rounded-2xl px-4 py-2 text-sm font-extrabold bg-green-600 text-white"
+                                >
+                                  Adicionar
+                                </button>
+                              ) : (
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    onClick={() => removeProduct(p)}
+                                    className="rounded-2xl px-3 py-2 text-sm font-extrabold bg-zinc-200"
+                                  >
+                                    -
+                                  </button>
+
+                                  <span className="text-sm font-extrabold w-6 text-center">
+                                    {inCartQty}
+                                  </span>
+
+                                  <button
+                                    onClick={() => addProduct(p)}
+                                    className="rounded-2xl px-3 py-2 text-sm font-extrabold bg-green-600 text-white"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              )
+                            ) : (
+                              <button
+                                disabled
+                                className="rounded-2xl px-4 py-2 text-sm font-extrabold bg-zinc-200 text-zinc-500 cursor-not-allowed"
+                              >
+                                Indisponível
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
-
-                      {/* Botões */}
-                      {p.active ? (
-                        <div className="flex flex-col items-end gap-2">
-                          {inCartQty === 0 ? (
-                            <button
-                              onClick={() => addProduct(p)}
-                              className="rounded-xl px-4 py-2 text-sm font-semibold bg-black text-white"
-                            >
-                              Adicionar
-                            </button>
-                          ) : (
-                            <div className="flex items-center gap-2">
-                              <button
-                                onClick={() => removeProduct(p)}
-                                className="rounded-xl px-3 py-2 text-sm font-semibold bg-zinc-200"
-                              >
-                                -
-                              </button>
-                              <span className="text-sm font-semibold w-6 text-center">
-                                {inCartQty}
-                              </span>
-                              <button
-                                onClick={() => addProduct(p)}
-                                className="rounded-xl px-3 py-2 text-sm font-semibold bg-black text-white"
-                              >
-                                +
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <button
-                          disabled
-                          className="rounded-xl px-4 py-2 text-sm font-semibold bg-zinc-200 text-zinc-500 cursor-not-allowed"
-                        >
-                          Indisponível
-                        </button>
-                      )}
                     </div>
                   </div>
                 );
@@ -434,61 +535,27 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
           )}
         </section>
 
-        {/* Carrinho */}
+        {/* Checkout (fica aqui mas o fluxo principal é via modal) */}
         <section className="rounded-2xl border bg-white p-4 shadow-sm space-y-3">
-          <h2 className="text-lg font-bold">Carrinho</h2>
-
-          {cartItems.length === 0 ? (
-            <p className="text-sm text-zinc-600">Seu carrinho está vazio.</p>
-          ) : (
-            <div className="space-y-2">
-              {cartItems.map((i) => (
-                <div
-                  key={i.product.id}
-                  className="flex items-center justify-between"
-                >
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold truncate">
-                      {i.product.name}
-                    </p>
-                    <p className="text-xs text-zinc-600">
-                      {i.qty} × {formatBRL(i.product.priceCents)}
-                    </p>
-                  </div>
-
-                  <p className="text-sm font-bold">
-                    {formatBRL(i.product.priceCents * i.qty)}
-                  </p>
-                </div>
-              ))}
-
-              <div className="border-t pt-3 flex items-center justify-between">
-                <p className="text-sm text-zinc-600">Total</p>
-                <p className="text-lg font-bold">{formatBRL(totalCents)}</p>
-              </div>
-            </div>
-          )}
-        </section>
-
-        {/* Dados do cliente */}
-        <section className="rounded-2xl border bg-white p-4 shadow-sm space-y-3">
-          <h2 className="text-lg font-bold">Seus dados</h2>
+          <h2 className="text-lg font-extrabold">Seus dados</h2>
 
           <div className="space-y-2">
             <input
-              className="w-full rounded-xl border px-3 py-2 text-sm"
+              className="w-full rounded-2xl border px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
               placeholder="Nome"
               value={customerName}
               onChange={(e) => setCustomerName(e.target.value)}
             />
+
             <input
-              className="w-full rounded-xl border px-3 py-2 text-sm"
+              className="w-full rounded-2xl border px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
               placeholder="Telefone"
               value={customerPhone}
               onChange={(e) => setCustomerPhone(e.target.value)}
             />
+
             <input
-              className="w-full rounded-xl border px-3 py-2 text-sm"
+              className="w-full rounded-2xl border px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
               placeholder="Endereço"
               value={customerAddress}
               onChange={(e) => setCustomerAddress(e.target.value)}
@@ -496,14 +563,173 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
           </div>
 
           <button
-            onClick={finalizeOrder}
-            disabled={isSubmitting}
-            className="w-full rounded-2xl px-4 py-3 text-sm font-bold bg-green-600 text-white disabled:opacity-50"
+            onClick={() => setCartOpen(true)}
+            className="w-full rounded-2xl px-4 py-3 text-sm font-extrabold bg-zinc-900 text-white"
           >
-            {isSubmitting ? "Enviando..." : "Finalizar pedido"}
+            Abrir carrinho
           </button>
         </section>
       </main>
+
+      {/* Bottom bar (iFood-like) */}
+      {totalItems > 0 ? (
+        <div className="fixed bottom-0 left-0 right-0 z-40 border-t bg-white/95 backdrop-blur">
+          <div className="mx-auto max-w-3xl px-4 py-3 flex items-center gap-3">
+            <button
+              onClick={() => setCartOpen(true)}
+              className="flex-1 rounded-2xl px-4 py-3 text-sm font-extrabold bg-green-600 text-white flex items-center justify-between"
+            >
+              <span>Ver carrinho</span>
+              <span className="text-white/90">
+                {totalItems} • {formatBRL(totalCents)}
+              </span>
+            </button>
+
+            <button
+              onClick={() => {
+                clearCart();
+                showToast("info", "Carrinho limpo.");
+              }}
+              className="shrink-0 rounded-2xl px-4 py-3 text-sm font-extrabold bg-zinc-100 text-zinc-800 border"
+            >
+              Limpar
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Cart Modal */}
+      {cartOpen ? (
+        <div className="fixed inset-0 z-50">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setCartOpen(false)}
+          />
+
+          <div className="absolute bottom-0 left-0 right-0">
+            <div className="mx-auto max-w-3xl">
+              <div className="rounded-t-3xl border bg-white shadow-2xl p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-extrabold">Seu carrinho</h3>
+                    <p className="text-xs text-zinc-600 mt-1">
+                      {totalItems} item(ns) • {formatBRL(totalCents)}
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => setCartOpen(false)}
+                    className="rounded-2xl px-4 py-2 text-sm font-extrabold border bg-white"
+                  >
+                    Fechar
+                  </button>
+                </div>
+
+                <div className="mt-4 space-y-3 max-h-[45vh] overflow-auto pr-1">
+                  {cartItems.length === 0 ? (
+                    <div className="rounded-2xl border bg-zinc-50 p-4 text-sm text-zinc-600">
+                      Seu carrinho está vazio.
+                    </div>
+                  ) : (
+                    cartItems.map((i) => (
+                      <div
+                        key={i.product.id}
+                        className="rounded-2xl border p-3 flex items-center justify-between gap-3"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-extrabold truncate">
+                            {i.product.name}
+                          </p>
+                          <p className="text-xs text-zinc-600">
+                            {formatBRL(i.product.priceCents)}
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => removeProduct(i.product)}
+                            className="rounded-2xl px-3 py-2 text-sm font-extrabold bg-zinc-200"
+                          >
+                            -
+                          </button>
+
+                          <span className="text-sm font-extrabold w-6 text-center">
+                            {i.qty}
+                          </span>
+
+                          <button
+                            onClick={() => addProduct(i.product)}
+                            className="rounded-2xl px-3 py-2 text-sm font-extrabold bg-green-600 text-white"
+                          >
+                            +
+                          </button>
+                        </div>
+
+                        <p className="text-sm font-extrabold">
+                          {formatBRL(i.product.priceCents * i.qty)}
+                        </p>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                <div className="mt-4 border-t pt-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm text-zinc-600">Total</p>
+                    <p className="text-lg font-extrabold">
+                      {formatBRL(totalCents)}
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <input
+                      className="w-full rounded-2xl border px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+                      placeholder="Nome"
+                      value={customerName}
+                      onChange={(e) => setCustomerName(e.target.value)}
+                    />
+
+                    <input
+                      className="w-full rounded-2xl border px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+                      placeholder="Telefone"
+                      value={customerPhone}
+                      onChange={(e) => setCustomerPhone(e.target.value)}
+                    />
+
+                    <input
+                      className="w-full rounded-2xl border px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+                      placeholder="Endereço"
+                      value={customerAddress}
+                      onChange={(e) => setCustomerAddress(e.target.value)}
+                    />
+                  </div>
+
+                  <button
+                    onClick={finalizeOrder}
+                    disabled={isSubmitting}
+                    className="w-full rounded-2xl px-4 py-4 text-sm font-extrabold bg-green-600 text-white disabled:opacity-50"
+                  >
+                    {isSubmitting ? "Enviando..." : "Finalizar pedido"}
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      clearCart();
+                      setCartOpen(false);
+                      showToast("info", "Carrinho limpo.");
+                    }}
+                    className="w-full rounded-2xl px-4 py-3 text-sm font-extrabold border bg-white"
+                  >
+                    Limpar carrinho
+                  </button>
+                </div>
+              </div>
+
+              <div className="h-3 bg-transparent" />
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
