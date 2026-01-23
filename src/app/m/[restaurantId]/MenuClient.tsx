@@ -37,7 +37,8 @@ type ToastType = "success" | "error" | "info";
 
 export default function MenuClient({ restaurantId }: { restaurantId: string }) {
   const API_URL =
-    process.env.NEXT_PUBLIC_API_URL || "https://cardapiopro-backend.onrender.com";
+    process.env.NEXT_PUBLIC_API_URL ||
+    "https://cardapiopro-backend.onrender.com";
 
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
@@ -176,7 +177,6 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
 
         if (!isRetryable) break;
 
-        // pequeno delay antes do retry
         await new Promise((r) => setTimeout(r, 800));
       }
     }
@@ -350,28 +350,45 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
                     className="rounded-2xl border bg-white p-4 shadow-sm"
                   >
                     <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h3 className="font-semibold text-zinc-900 truncate">
-                          {p.name}
-                        </h3>
+                      {/* ✅ Thumb + infos */}
+                      <div className="flex items-start gap-3 min-w-0 flex-1">
+                        {p.imageUrl ? (
+                          <img
+                            src={p.imageUrl}
+                            alt={p.name}
+                            className="w-[86px] h-[86px] rounded-xl object-cover border"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div className="w-[86px] h-[86px] rounded-xl border bg-zinc-50 flex items-center justify-center text-xs font-semibold text-zinc-500">
+                            Sem foto
+                          </div>
+                        )}
 
-                        {p.description ? (
-                          <p className="text-sm text-zinc-600 mt-1 leading-snug">
-                            {p.description}
+                        <div className="min-w-0 flex-1">
+                          <h3 className="font-semibold text-zinc-900 truncate">
+                            {p.name}
+                          </h3>
+
+                          {p.description ? (
+                            <p className="text-sm text-zinc-600 mt-1 leading-snug line-clamp-2">
+                              {p.description}
+                            </p>
+                          ) : null}
+
+                          <p className="mt-2 text-sm font-bold text-zinc-900">
+                            {formatBRL(p.priceCents)}
                           </p>
-                        ) : null}
 
-                        <p className="mt-2 text-sm font-bold text-zinc-900">
-                          {formatBRL(p.priceCents)}
-                        </p>
-
-                        {!p.active ? (
-                          <p className="mt-1 text-xs text-zinc-500">
-                            Indisponível
-                          </p>
-                        ) : null}
+                          {!p.active ? (
+                            <p className="mt-1 text-xs text-zinc-500">
+                              Indisponível
+                            </p>
+                          ) : null}
+                        </div>
                       </div>
 
+                      {/* Botões */}
                       {p.active ? (
                         <div className="flex flex-col items-end gap-2">
                           {inCartQty === 0 ? (
