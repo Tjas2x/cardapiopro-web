@@ -26,6 +26,8 @@ type CartItem = {
   qty: number;
 };
 
+type ToastType = "success" | "error" | "info";
+
 function formatBRL(cents: number) {
   return (cents / 100).toLocaleString("pt-BR", {
     style: "currency",
@@ -33,7 +35,33 @@ function formatBRL(cents: number) {
   });
 }
 
-type ToastType = "success" | "error" | "info";
+function onlyDigits(s: string) {
+  return String(s || "").replace(/\D/g, "");
+}
+
+// (99) 99999-9999
+function formatPhoneBR(raw: string) {
+  const d = onlyDigits(raw).slice(0, 11);
+
+  if (d.length <= 2) return d ? `(${d}` : "";
+  if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
+  if (d.length <= 10)
+    return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
+
+  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
+}
+
+function sanitizePhoneForWhatsApp(phone: string) {
+  // remove tudo e tenta padronizar com 55
+  const d = onlyDigits(phone);
+  if (!d) return null;
+
+  // se já tiver 55 na frente e tiver 12+ dígitos, ok
+  if (d.startsWith("55")) return d;
+
+  // se não tiver, assume BR
+  return `55${d}`;
+}
 
 export default function MenuClient({ restaurantId }: { restaurantId: string }) {
   const API_URL =
@@ -42,10 +70,14 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
 
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loadingFirst, setLoadingFirst] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  const [search, setSearch] = useState("");
+  const [tab, setTab] = useState<"ALL" | "ACTIVE" | "INACTIVE">("ALL");
+
   const [cart, setCart] = useState<Record<string, CartItem>>({});
+  const [cartOpen, setCartOpen] = useState(false);
 
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
@@ -57,10 +89,8 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
   );
   const toastTimer = useRef<NodeJS.Timeout | null>(null);
 
-  const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<"ALL" | "ACTIVE" | "INACTIVE">("ALL");
-
-  const [cartOpen, setCartOpen] = useState(false);
+  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const isFetchingRef = useRef(false);
 
   function showToast(type: ToastType, msg: string) {
     setToast({ type, msg });
@@ -70,14 +100,10 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
     toastTimer.current = setTimeout(() => {
       setToast(null);
       toastTimer.current = null;
-    }, 3000);
+    }, 3200);
   }
 
   const cartItems = useMemo(() => Object.values(cart), [cart]);
-
-  const totalItems = useMemo(() => {
-    return cartItems.reduce((acc, item) => acc + item.qty, 0);
-  }, [cartItems]);
 
   const totalCents = useMemo(() => {
     return cartItems.reduce(
@@ -86,57 +112,22 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
     );
   }, [cartItems]);
 
-  const filteredProducts = useMemo(() => {
+  const productsFiltered = useMemo(() => {
     const q = search.trim().toLowerCase();
 
-    return products
-      .filter((p) => {
-        if (filter === "ACTIVE") return p.active;
-        if (filter === "INACTIVE") return !p.active;
-        return true;
-      })
-      .filter((p) => {
-        if (!q) return true;
-        const inName = p.name.toLowerCase().includes(q);
-        const inDesc = (p.description || "").toLowerCase().includes(q);
-        return inName || inDesc;
-      });
-  }, [products, search, filter]);
+    let list = products;
 
-  async function loadMenu() {
-    try {
-      setLoading(true);
-      setLoadError(null);
+    if (tab === "ACTIVE") list = list.filter((p) => p.active);
+    if (tab === "INACTIVE") list = list.filter((p) => !p.active);
 
-      const r = await fetch(`${API_URL}/restaurants/${restaurantId}`, {
-        cache: "no-store",
-      });
+    if (!q) return list;
 
-      if (!r.ok) {
-        const txt = await r.text().catch(() => "");
-        throw new Error(`Erro ao carregar restaurante (${r.status}). ${txt}`);
-      }
-
-      const restaurantData: Restaurant = await r.json();
-      setRestaurant(restaurantData);
-
-      const p = await fetch(`${API_URL}/restaurants/${restaurantId}/products`, {
-        cache: "no-store",
-      });
-
-      const productsData: Product[] = p.ok ? await p.json() : [];
-      setProducts(productsData);
-    } catch (e: any) {
-      setLoadError(e?.message || "Falha ao carregar cardápio.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    loadMenu();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [restaurantId]);
+    return list.filter((p) => {
+      const a = p.name.toLowerCase();
+      const b = (p.description || "").toLowerCase();
+      return a.includes(q) || b.includes(q);
+    });
+  }, [products, search, tab]);
 
   function addProduct(p: Product) {
     if (!p.active) return;
@@ -174,6 +165,129 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
   function clearCart() {
     setCart({});
   }
+
+  function syncCartWithProducts(nextProducts: Product[]) {
+    // remove do carrinho itens que sumiram ou ficaram inativos
+    const map = new Map(nextProducts.map((p) => [p.id, p]));
+    let changed = false;
+
+    setCart((prev) => {
+      const copy = { ...prev };
+
+      for (const productId of Object.keys(copy)) {
+        const exists = map.get(productId);
+
+        if (!exists) {
+          delete copy[productId];
+          changed = true;
+          continue;
+        }
+
+        if (!exists.active) {
+          delete copy[productId];
+          changed = true;
+          continue;
+        }
+
+        // atualiza snapshot do produto no carrinho (preço/descrição/imagem)
+        copy[productId] = {
+          ...copy[productId],
+          product: exists,
+        };
+      }
+
+      return copy;
+    });
+
+    if (changed) {
+      showToast(
+        "info",
+        "Alguns itens ficaram indisponíveis e foram removidos do carrinho."
+      );
+    }
+  }
+
+  async function fetchRestaurant() {
+    const r = await fetch(`${API_URL}/restaurants/${restaurantId}`, {
+      cache: "no-store",
+    });
+
+    if (!r.ok) {
+      const txt = await r.text().catch(() => "");
+      throw new Error(`Erro ao carregar restaurante (${r.status}). ${txt}`);
+    }
+
+    const data: Restaurant = await r.json();
+    return data;
+  }
+
+  async function fetchProducts() {
+    const p = await fetch(`${API_URL}/restaurants/${restaurantId}/products`, {
+      cache: "no-store",
+    });
+
+    if (!p.ok) {
+      // se falhar, retorna vazio (sem crash)
+      return [] as Product[];
+    }
+
+    const data: Product[] = await p.json();
+    return data;
+  }
+
+  async function loadFirstTime() {
+    try {
+      setLoadingFirst(true);
+      setLoadError(null);
+
+      const [r, p] = await Promise.all([fetchRestaurant(), fetchProducts()]);
+
+      setRestaurant(r);
+      setProducts(p);
+      syncCartWithProducts(p);
+    } catch (e: any) {
+      setLoadError(e?.message || "Falha ao carregar cardápio.");
+    } finally {
+      setLoadingFirst(false);
+    }
+  }
+
+  async function refreshSilent() {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
+
+    try {
+      // só atualiza produtos e status do restaurante
+      const [r, p] = await Promise.all([fetchRestaurant(), fetchProducts()]);
+      setRestaurant(r);
+      setProducts(p);
+      syncCartWithProducts(p);
+    } catch {
+      // silencioso mesmo (não quebra)
+    } finally {
+      isFetchingRef.current = false;
+    }
+  }
+
+  // ✅ carregamento inicial + polling
+  useEffect(() => {
+    loadFirstTime();
+
+    if (pollingRef.current) clearInterval(pollingRef.current);
+
+    pollingRef.current = setInterval(() => {
+      refreshSilent();
+    }, 15000); // ✅ 15s (leve e suficiente)
+
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+      pollingRef.current = null;
+
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+      toastTimer.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restaurantId]);
 
   async function postWithRetry(url: string, body: any, tries = 2) {
     let lastError: any;
@@ -215,6 +329,18 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
     throw lastError;
   }
 
+  function validateCustomer() {
+    const errors: { field: string; msg: string }[] = [];
+
+    if (!customerName.trim()) errors.push({ field: "name", msg: "Nome" });
+    if (onlyDigits(customerPhone).length < 10)
+      errors.push({ field: "phone", msg: "Telefone válido" });
+    if (!customerAddress.trim())
+      errors.push({ field: "address", msg: "Endereço" });
+
+    return errors;
+  }
+
   async function finalizeOrder() {
     if (!restaurant) {
       showToast("error", "Cardápio ainda não carregou.");
@@ -231,12 +357,9 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
       return;
     }
 
-    if (
-      !customerName.trim() ||
-      !customerPhone.trim() ||
-      !customerAddress.trim()
-    ) {
-      showToast("error", "Preencha Nome, Telefone e Endereço.");
+    const errors = validateCustomer();
+    if (errors.length > 0) {
+      showToast("error", `Preencha: ${errors.map((e) => e.msg).join(", ")}.`);
       return;
     }
 
@@ -246,12 +369,50 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
       setIsSubmitting(true);
       showToast("info", "Enviando pedido...");
 
+      // ✅ antes de enviar, faz uma revalidação rápida dos produtos
+      const freshProducts = await fetchProducts();
+
+      // remove itens que sumiram/inativos
+      const freshMap = new Map(freshProducts.map((p) => [p.id, p]));
+      const safeItems = cartItems
+        .map((i) => {
+          const exists = freshMap.get(i.product.id);
+          if (!exists) return null;
+          if (!exists.active) return null;
+          return { product: exists, qty: i.qty };
+        })
+        .filter(Boolean) as { product: Product; qty: number }[];
+
+      if (safeItems.length === 0) {
+        clearCart();
+        showToast(
+          "error",
+          "Os itens do carrinho ficaram indisponíveis. Selecione novamente."
+        );
+        return;
+      }
+
+      // se removeu algum, atualiza carrinho e avisa
+      if (safeItems.length !== cartItems.length) {
+        const next: Record<string, CartItem> = {};
+        safeItems.forEach((s) => {
+          next[s.product.id] = { product: s.product, qty: s.qty };
+        });
+        setCart(next);
+
+        showToast(
+          "info",
+          "Alguns itens ficaram indisponíveis e foram removidos do carrinho."
+        );
+        return;
+      }
+
       const payload = {
         restaurantId: restaurant.id,
         customerName: customerName.trim(),
         customerPhone: customerPhone.trim(),
         customerAddress: customerAddress.trim(),
-        items: cartItems.map((i) => ({
+        items: safeItems.map((i) => ({
           productId: i.product.id,
           quantity: i.qty,
         })),
@@ -261,11 +422,12 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
 
       showToast("success", "Pedido enviado com sucesso ✅");
 
-      clearCart();
+      setCart({});
+      setCartOpen(false);
+
       setCustomerName("");
       setCustomerPhone("");
       setCustomerAddress("");
-      setCartOpen(false);
     } catch (e: any) {
       showToast("error", e?.message || "Falha ao finalizar pedido.");
     } finally {
@@ -273,32 +435,14 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
     }
   }
 
-  if (loading) {
+  if (loadingFirst) {
     return (
-      <main className="min-h-screen bg-zinc-100 px-4 py-8">
-        <div className="mx-auto max-w-3xl">
-          <h1 className="text-xl font-extrabold">Carregando cardápio...</h1>
+      <main className="min-h-screen bg-zinc-100">
+        <div className="mx-auto max-w-3xl px-4 py-8">
+          <h1 className="text-xl font-bold">Carregando cardápio...</h1>
           <p className="text-sm text-zinc-600 mt-2">
-            Buscando restaurante e produtos...
+            Carregando restaurante e produtos...
           </p>
-
-          <div className="mt-6 space-y-3">
-            {[1, 2, 3, 4].map((n) => (
-              <div
-                key={n}
-                className="rounded-2xl border bg-white p-4 shadow-sm"
-              >
-                <div className="flex gap-3">
-                  <div className="w-[86px] h-[86px] rounded-xl bg-zinc-200 animate-pulse" />
-                  <div className="flex-1 space-y-2">
-                    <div className="h-4 w-2/3 bg-zinc-200 rounded animate-pulse" />
-                    <div className="h-3 w-full bg-zinc-200 rounded animate-pulse" />
-                    <div className="h-3 w-1/2 bg-zinc-200 rounded animate-pulse" />
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
         </div>
       </main>
     );
@@ -306,14 +450,14 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
 
   if (loadError || !restaurant) {
     return (
-      <main className="min-h-screen bg-zinc-100 px-4 py-8">
-        <div className="mx-auto max-w-3xl">
-          <h1 className="text-xl font-extrabold">Não foi possível carregar</h1>
+      <main className="min-h-screen bg-zinc-100">
+        <div className="mx-auto max-w-3xl px-4 py-8">
+          <h1 className="text-xl font-bold">Não foi possível carregar</h1>
           <p className="text-sm text-zinc-700 mt-2">{loadError}</p>
 
           <button
-            onClick={loadMenu}
-            className="mt-4 rounded-2xl px-4 py-3 text-sm font-bold border bg-white"
+            onClick={loadFirstTime}
+            className="mt-4 rounded-xl px-4 py-2 text-sm font-semibold bg-black text-white"
           >
             Tentar novamente
           </button>
@@ -322,11 +466,13 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
     );
   }
 
+  const waPhone = restaurant.phone ? sanitizePhoneForWhatsApp(restaurant.phone) : null;
+
   return (
     <div className="min-h-screen bg-zinc-100">
       {/* Toast */}
       {toast ? (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50">
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60]">
           <div
             className={`rounded-2xl px-4 py-3 text-sm font-semibold shadow-lg border ${
               toast.type === "success"
@@ -341,12 +487,25 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
         </div>
       ) : null}
 
-      {/* Header */}
+      {/* WhatsApp */}
+      {waPhone ? (
+        <a
+          href={`https://wa.me/${waPhone}?text=${encodeURIComponent(
+            `Olá! Vim pelo cardápio do ${restaurant.name}.`
+          )}`}
+          target="_blank"
+          rel="noreferrer"
+          className="fixed bottom-20 right-4 z-[55] rounded-full px-4 py-3 bg-green-600 text-white font-bold shadow-lg"
+        >
+          WhatsApp
+        </a>
+      ) : null}
+
       <header className="sticky top-0 z-10 border-b bg-white/90 backdrop-blur">
         <div className="mx-auto max-w-3xl px-4 py-4">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <h1 className="text-xl font-extrabold tracking-tight truncate">
+              <h1 className="text-xl font-bold tracking-tight truncate">
                 {restaurant.name || "Cardápio"}
               </h1>
 
@@ -373,49 +532,49 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
               </div>
             </div>
 
-            <div className="shrink-0 rounded-full bg-zinc-900 text-white text-xs px-3 py-1 font-semibold">
+            <div className="shrink-0 rounded-full bg-black text-white text-xs px-3 py-1 font-semibold">
               {products.length} produto(s)
             </div>
           </div>
 
-          {/* Search + filters */}
-          <div className="mt-4 flex flex-col gap-2">
+          {/* Search + tabs */}
+          <div className="mt-4 flex flex-col gap-3">
             <input
-              className="w-full rounded-2xl border bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
-              placeholder="Buscar produto..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              placeholder="Buscar produto..."
+              className="w-full rounded-2xl border px-4 py-3 text-sm bg-white"
             />
 
             <div className="flex gap-2">
               <button
-                onClick={() => setFilter("ALL")}
-                className={`flex-1 rounded-2xl px-3 py-2 text-xs font-extrabold border ${
-                  filter === "ALL"
-                    ? "bg-zinc-900 text-white border-zinc-900"
-                    : "bg-white text-zinc-900"
+                onClick={() => setTab("ALL")}
+                className={`flex-1 rounded-2xl px-4 py-2 text-sm font-bold border ${
+                  tab === "ALL"
+                    ? "bg-black text-white border-black"
+                    : "bg-white text-zinc-900 border-zinc-200"
                 }`}
               >
                 Todos
               </button>
 
               <button
-                onClick={() => setFilter("ACTIVE")}
-                className={`flex-1 rounded-2xl px-3 py-2 text-xs font-extrabold border ${
-                  filter === "ACTIVE"
-                    ? "bg-zinc-900 text-white border-zinc-900"
-                    : "bg-white text-zinc-900"
+                onClick={() => setTab("ACTIVE")}
+                className={`flex-1 rounded-2xl px-4 py-2 text-sm font-bold border ${
+                  tab === "ACTIVE"
+                    ? "bg-black text-white border-black"
+                    : "bg-white text-zinc-900 border-zinc-200"
                 }`}
               >
                 Disponíveis
               </button>
 
               <button
-                onClick={() => setFilter("INACTIVE")}
-                className={`flex-1 rounded-2xl px-3 py-2 text-xs font-extrabold border ${
-                  filter === "INACTIVE"
-                    ? "bg-zinc-900 text-white border-zinc-900"
-                    : "bg-white text-zinc-900"
+                onClick={() => setTab("INACTIVE")}
+                className={`flex-1 rounded-2xl px-4 py-2 text-sm font-bold border ${
+                  tab === "INACTIVE"
+                    ? "bg-black text-white border-black"
+                    : "bg-white text-zinc-900 border-zinc-200"
                 }`}
               >
                 Indisponíveis
@@ -428,18 +587,20 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
       <main className="mx-auto max-w-3xl px-4 py-6 space-y-6 pb-44">
         {/* Produtos */}
         <section>
-          <div className="flex items-end justify-between mb-3">
-            <h2 className="text-lg font-extrabold">Produtos</h2>
-            <p className="text-xs text-zinc-600">{filteredProducts.length}</p>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-bold">Produtos</h2>
+            <span className="text-sm text-zinc-500">
+              {productsFiltered.length}
+            </span>
           </div>
 
-          {filteredProducts.length === 0 ? (
+          {productsFiltered.length === 0 ? (
             <div className="rounded-2xl border bg-white p-4 text-sm text-zinc-600">
               Nenhum produto encontrado.
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-3">
-              {filteredProducts.map((p) => {
+              {productsFiltered.map((p) => {
                 const inCartQty = cart[p.id]?.qty ?? 0;
 
                 return (
@@ -448,33 +609,24 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
                     className="rounded-2xl border bg-white p-4 shadow-sm"
                   >
                     <div className="flex items-start justify-between gap-3">
-                      {/* Thumb + infos */}
                       <div className="flex items-start gap-3 min-w-0 flex-1">
                         {p.imageUrl ? (
                           <img
                             src={p.imageUrl}
                             alt={p.name}
-                            className="w-[92px] h-[92px] rounded-2xl object-cover border"
+                            className="w-[86px] h-[86px] rounded-xl object-cover border"
                             loading="lazy"
                           />
                         ) : (
-                          <div className="w-[92px] h-[92px] rounded-2xl border bg-zinc-50 flex items-center justify-center text-xs font-semibold text-zinc-500">
+                          <div className="w-[86px] h-[86px] rounded-xl border bg-zinc-50 flex items-center justify-center text-xs font-semibold text-zinc-500">
                             Sem foto
                           </div>
                         )}
 
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <h3 className="font-extrabold text-zinc-900 truncate">
-                              {p.name}
-                            </h3>
-
-                            {!p.active ? (
-                              <span className="text-[11px] px-2 py-1 rounded-full bg-zinc-100 text-zinc-700 font-bold">
-                                Indisponível
-                              </span>
-                            ) : null}
-                          </div>
+                          <h3 className="font-semibold text-zinc-900 truncate">
+                            {p.name}
+                          </h3>
 
                           {p.description ? (
                             <p className="text-sm text-zinc-600 mt-1 leading-snug line-clamp-2">
@@ -482,51 +634,56 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
                             </p>
                           ) : null}
 
-                          <div className="mt-3 flex items-center justify-between">
-                            <p className="text-base font-extrabold text-zinc-900">
-                              {formatBRL(p.priceCents)}
+                          <p className="mt-2 text-sm font-bold text-zinc-900">
+                            {formatBRL(p.priceCents)}
+                          </p>
+
+                          {!p.active ? (
+                            <p className="mt-1 text-xs text-zinc-500">
+                              Indisponível
                             </p>
-
-                            {p.active ? (
-                              inCartQty === 0 ? (
-                                <button
-                                  onClick={() => addProduct(p)}
-                                  className="rounded-2xl px-4 py-2 text-sm font-extrabold bg-green-600 text-white"
-                                >
-                                  Adicionar
-                                </button>
-                              ) : (
-                                <div className="flex items-center gap-2">
-                                  <button
-                                    onClick={() => removeProduct(p)}
-                                    className="rounded-2xl px-3 py-2 text-sm font-extrabold bg-zinc-200"
-                                  >
-                                    -
-                                  </button>
-
-                                  <span className="text-sm font-extrabold w-6 text-center">
-                                    {inCartQty}
-                                  </span>
-
-                                  <button
-                                    onClick={() => addProduct(p)}
-                                    className="rounded-2xl px-3 py-2 text-sm font-extrabold bg-green-600 text-white"
-                                  >
-                                    +
-                                  </button>
-                                </div>
-                              )
-                            ) : (
-                              <button
-                                disabled
-                                className="rounded-2xl px-4 py-2 text-sm font-extrabold bg-zinc-200 text-zinc-500 cursor-not-allowed"
-                              >
-                                Indisponível
-                              </button>
-                            )}
-                          </div>
+                          ) : null}
                         </div>
                       </div>
+
+                      {/* Botões */}
+                      {p.active ? (
+                        <div className="flex flex-col items-end gap-2">
+                          {inCartQty === 0 ? (
+                            <button
+                              onClick={() => addProduct(p)}
+                              className="rounded-xl px-4 py-2 text-sm font-semibold bg-green-600 text-white"
+                            >
+                              Adicionar
+                            </button>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => removeProduct(p)}
+                                className="rounded-xl px-3 py-2 text-sm font-semibold bg-zinc-200"
+                              >
+                                -
+                              </button>
+                              <span className="text-sm font-semibold w-6 text-center">
+                                {inCartQty}
+                              </span>
+                              <button
+                                onClick={() => addProduct(p)}
+                                className="rounded-xl px-3 py-2 text-sm font-semibold bg-green-600 text-white"
+                              >
+                                +
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <button
+                          disabled
+                          className="rounded-xl px-4 py-2 text-sm font-semibold bg-zinc-200 text-zinc-500 cursor-not-allowed"
+                        >
+                          Indisponível
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -535,197 +692,150 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
           )}
         </section>
 
-        {/* Checkout (fica aqui mas o fluxo principal é via modal) */}
+        {/* Dados do cliente */}
         <section className="rounded-2xl border bg-white p-4 shadow-sm space-y-3">
-          <h2 className="text-lg font-extrabold">Seus dados</h2>
+          <h2 className="text-lg font-bold">Seus dados</h2>
 
           <div className="space-y-2">
             <input
-              className="w-full rounded-2xl border px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+              className="w-full rounded-xl border px-3 py-3 text-sm"
               placeholder="Nome"
               value={customerName}
               onChange={(e) => setCustomerName(e.target.value)}
             />
 
             <input
-              className="w-full rounded-2xl border px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+              className="w-full rounded-xl border px-3 py-3 text-sm"
               placeholder="Telefone"
               value={customerPhone}
-              onChange={(e) => setCustomerPhone(e.target.value)}
+              onChange={(e) => setCustomerPhone(formatPhoneBR(e.target.value))}
+              inputMode="tel"
             />
 
             <input
-              className="w-full rounded-2xl border px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
+              className="w-full rounded-xl border px-3 py-3 text-sm"
               placeholder="Endereço"
               value={customerAddress}
               onChange={(e) => setCustomerAddress(e.target.value)}
             />
           </div>
-
-          <button
-            onClick={() => setCartOpen(true)}
-            className="w-full rounded-2xl px-4 py-3 text-sm font-extrabold bg-zinc-900 text-white"
-          >
-            Abrir carrinho
-          </button>
         </section>
       </main>
 
-      {/* Bottom bar (iFood-like) */}
-      {totalItems > 0 ? (
-        <div className="fixed bottom-0 left-0 right-0 z-40 border-t bg-white/95 backdrop-blur">
-          <div className="mx-auto max-w-3xl px-4 py-3 flex items-center gap-3">
-            <button
-              onClick={() => setCartOpen(true)}
-              className="flex-1 rounded-2xl px-4 py-3 text-sm font-extrabold bg-green-600 text-white flex items-center justify-between"
-            >
-              <span>Ver carrinho</span>
-              <span className="text-white/90">
-                {totalItems} • {formatBRL(totalCents)}
-              </span>
-            </button>
+      {/* Bottom bar */}
+      <div className="fixed bottom-0 left-0 right-0 border-t bg-white/95 backdrop-blur z-50">
+        <div className="mx-auto max-w-3xl px-4 py-3 flex items-center gap-3">
+          <button
+            onClick={() => setCartOpen(true)}
+            className="flex-1 rounded-2xl px-4 py-3 text-sm font-bold bg-black text-white"
+          >
+            {cartItems.length === 0
+              ? "Abrir carrinho"
+              : `Carrinho • ${cartItems.length} item(s) • ${formatBRL(
+                  totalCents
+                )}`}
+          </button>
 
-            <button
-              onClick={() => {
-                clearCart();
-                showToast("info", "Carrinho limpo.");
-              }}
-              className="shrink-0 rounded-2xl px-4 py-3 text-sm font-extrabold bg-zinc-100 text-zinc-800 border"
-            >
-              Limpar
-            </button>
-          </div>
+          <button
+            onClick={refreshSilent}
+            className="rounded-2xl px-4 py-3 text-sm font-bold border bg-white"
+          >
+            Atualizar
+          </button>
         </div>
-      ) : null}
+      </div>
 
-      {/* Cart Modal */}
+      {/* Cart modal */}
       {cartOpen ? (
-        <div className="fixed inset-0 z-50">
+        <div className="fixed inset-0 z-[70]">
           <div
-            className="absolute inset-0 bg-black/40"
+            className="absolute inset-0 bg-black/50"
             onClick={() => setCartOpen(false)}
           />
-
           <div className="absolute bottom-0 left-0 right-0">
             <div className="mx-auto max-w-3xl">
-              <div className="rounded-t-3xl border bg-white shadow-2xl p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-lg font-extrabold">Seu carrinho</h3>
-                    <p className="text-xs text-zinc-600 mt-1">
-                      {totalItems} item(ns) • {formatBRL(totalCents)}
-                    </p>
-                  </div>
-
+              <div className="rounded-t-3xl bg-white p-5 shadow-xl border">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-bold">Carrinho</h3>
                   <button
                     onClick={() => setCartOpen(false)}
-                    className="rounded-2xl px-4 py-2 text-sm font-extrabold border bg-white"
+                    className="rounded-xl px-3 py-2 text-sm font-bold bg-zinc-200"
                   >
                     Fechar
                   </button>
                 </div>
 
-                <div className="mt-4 space-y-3 max-h-[45vh] overflow-auto pr-1">
+                <div className="mt-4 space-y-3 max-h-[55vh] overflow-auto pr-1">
                   {cartItems.length === 0 ? (
-                    <div className="rounded-2xl border bg-zinc-50 p-4 text-sm text-zinc-600">
+                    <p className="text-sm text-zinc-600">
                       Seu carrinho está vazio.
-                    </div>
+                    </p>
                   ) : (
-                    cartItems.map((i) => (
-                      <div
-                        key={i.product.id}
-                        className="rounded-2xl border p-3 flex items-center justify-between gap-3"
-                      >
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-extrabold truncate">
-                            {i.product.name}
-                          </p>
-                          <p className="text-xs text-zinc-600">
-                            {formatBRL(i.product.priceCents)}
-                          </p>
+                    <>
+                      {cartItems.map((i) => (
+                        <div
+                          key={i.product.id}
+                          className="flex items-center justify-between gap-3"
+                        >
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold truncate">
+                              {i.product.name}
+                            </p>
+                            <p className="text-xs text-zinc-600">
+                              {i.qty} × {formatBRL(i.product.priceCents)}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => removeProduct(i.product)}
+                              className="rounded-xl px-3 py-2 text-sm font-bold bg-zinc-200"
+                            >
+                              -
+                            </button>
+                            <span className="text-sm font-bold w-6 text-center">
+                              {i.qty}
+                            </span>
+                            <button
+                              onClick={() => addProduct(i.product)}
+                              className="rounded-xl px-3 py-2 text-sm font-bold bg-black text-white"
+                            >
+                              +
+                            </button>
+                          </div>
                         </div>
+                      ))}
 
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => removeProduct(i.product)}
-                            className="rounded-2xl px-3 py-2 text-sm font-extrabold bg-zinc-200"
-                          >
-                            -
-                          </button>
-
-                          <span className="text-sm font-extrabold w-6 text-center">
-                            {i.qty}
-                          </span>
-
-                          <button
-                            onClick={() => addProduct(i.product)}
-                            className="rounded-2xl px-3 py-2 text-sm font-extrabold bg-green-600 text-white"
-                          >
-                            +
-                          </button>
-                        </div>
-
-                        <p className="text-sm font-extrabold">
-                          {formatBRL(i.product.priceCents * i.qty)}
-                        </p>
+                      <div className="border-t pt-3 flex items-center justify-between">
+                        <p className="text-sm text-zinc-600">Total</p>
+                        <p className="text-lg font-bold">{formatBRL(totalCents)}</p>
                       </div>
-                    ))
+                    </>
                   )}
                 </div>
 
-                <div className="mt-4 border-t pt-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <p className="text-sm text-zinc-600">Total</p>
-                    <p className="text-lg font-extrabold">
-                      {formatBRL(totalCents)}
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <input
-                      className="w-full rounded-2xl border px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
-                      placeholder="Nome"
-                      value={customerName}
-                      onChange={(e) => setCustomerName(e.target.value)}
-                    />
-
-                    <input
-                      className="w-full rounded-2xl border px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
-                      placeholder="Telefone"
-                      value={customerPhone}
-                      onChange={(e) => setCustomerPhone(e.target.value)}
-                    />
-
-                    <input
-                      className="w-full rounded-2xl border px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-zinc-200"
-                      placeholder="Endereço"
-                      value={customerAddress}
-                      onChange={(e) => setCustomerAddress(e.target.value)}
-                    />
-                  </div>
+                <div className="mt-4 flex gap-2">
+                  <button
+                    onClick={clearCart}
+                    disabled={cartItems.length === 0}
+                    className="rounded-2xl px-4 py-3 text-sm font-bold border bg-white disabled:opacity-40"
+                  >
+                    Limpar
+                  </button>
 
                   <button
                     onClick={finalizeOrder}
-                    disabled={isSubmitting}
-                    className="w-full rounded-2xl px-4 py-4 text-sm font-extrabold bg-green-600 text-white disabled:opacity-50"
+                    disabled={isSubmitting || cartItems.length === 0}
+                    className="flex-1 rounded-2xl px-4 py-3 text-sm font-bold bg-green-600 text-white disabled:opacity-50"
                   >
                     {isSubmitting ? "Enviando..." : "Finalizar pedido"}
                   </button>
-
-                  <button
-                    onClick={() => {
-                      clearCart();
-                      setCartOpen(false);
-                      showToast("info", "Carrinho limpo.");
-                    }}
-                    className="w-full rounded-2xl px-4 py-3 text-sm font-extrabold border bg-white"
-                  >
-                    Limpar carrinho
-                  </button>
                 </div>
-              </div>
 
-              <div className="h-3 bg-transparent" />
+                <p className="text-xs text-zinc-500 mt-3">
+                  Se algum item ficar indisponível, ele será removido automaticamente.
+                </p>
+              </div>
             </div>
           </div>
         </div>
