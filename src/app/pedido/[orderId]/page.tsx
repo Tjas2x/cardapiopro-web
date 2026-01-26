@@ -31,7 +31,6 @@ type PublicOrder = {
   customerName: string | null;
   customerPhone: string | null;
   deliveryAddress: string | null;
-
   totalCents: number;
 
   paymentMethod: PaymentMethod;
@@ -124,7 +123,6 @@ export default function OrderTrackingPage({
     try {
       if (!silent) {
         setLoading(true);
-        setErr(null);
       }
 
       const r = await fetch(`${API_URL}/public/orders/${orderId}`, {
@@ -137,9 +135,12 @@ export default function OrderTrackingPage({
       }
 
       const data: PublicOrder = await r.json();
+
       setOrder(data);
+      setErr(null);
     } catch (e: any) {
-      setErr(e?.message || "Falha ao carregar pedido.");
+      // ✅ não derruba a tela se já tinha pedido carregado
+      setErr((prev) => prev || (e?.message || "Falha ao carregar pedido."));
     } finally {
       if (!silent) setLoading(false);
     }
@@ -152,7 +153,7 @@ export default function OrderTrackingPage({
 
     pollingRef.current = setInterval(() => {
       fetchOrder(true);
-    }, 10000); // 10s
+    }, 10000);
 
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current);
@@ -173,7 +174,7 @@ export default function OrderTrackingPage({
     return sanitizePhoneForWhatsApp(order.restaurant.phone);
   }, [order]);
 
-  if (loading) {
+  if (loading && !order) {
     return (
       <main className="min-h-screen bg-zinc-100">
         <div className="mx-auto max-w-3xl px-4 py-10">
@@ -186,7 +187,8 @@ export default function OrderTrackingPage({
     );
   }
 
-  if (err || !order) {
+  // ✅ se deu erro mas já tem order carregado, mostra aviso mas não trava
+  if (err && !order) {
     return (
       <main className="min-h-screen bg-zinc-100">
         <div className="mx-auto max-w-3xl px-4 py-10">
@@ -198,6 +200,26 @@ export default function OrderTrackingPage({
             className="mt-4 rounded-2xl px-4 py-3 text-sm font-bold bg-black text-white"
           >
             Tentar novamente
+          </button>
+        </div>
+      </main>
+    );
+  }
+
+  if (!order) {
+    return (
+      <main className="min-h-screen bg-zinc-100">
+        <div className="mx-auto max-w-3xl px-4 py-10">
+          <h1 className="text-xl font-bold">Pedido não encontrado</h1>
+          <p className="text-sm text-zinc-600 mt-2">
+            Se você acabou de finalizar, aguarde alguns segundos e tente atualizar.
+          </p>
+
+          <button
+            onClick={() => fetchOrder(false)}
+            className="mt-4 rounded-2xl px-4 py-3 text-sm font-bold bg-black text-white"
+          >
+            Atualizar
           </button>
         </div>
       </main>
@@ -217,6 +239,12 @@ export default function OrderTrackingPage({
               <p className="text-xs text-zinc-500 mt-1">
                 Pedido: <span className="font-mono">{order.id}</span>
               </p>
+
+              {err ? (
+                <p className="text-xs text-red-600 mt-2 font-semibold">
+                  Atenção: {err}
+                </p>
+              ) : null}
             </div>
 
             <button
@@ -229,7 +257,6 @@ export default function OrderTrackingPage({
         </div>
       </header>
 
-      {/* WhatsApp floating */}
       {waPhone ? (
         <a
           href={`https://wa.me/${waPhone}?text=${encodeURIComponent(
@@ -244,7 +271,6 @@ export default function OrderTrackingPage({
       ) : null}
 
       <div className="mx-auto max-w-3xl px-4 py-6 space-y-4">
-        {/* Status */}
         <section className="rounded-2xl border bg-white p-4 shadow-sm">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-bold">Status</h2>
@@ -262,7 +288,6 @@ export default function OrderTrackingPage({
             </span>
           </div>
 
-          {/* timeline */}
           {order.status !== "CANCELED" ? (
             <div className="mt-4 space-y-3">
               {["Recebido", "Em preparo", "Saiu para entrega", "Entregue"].map(
@@ -297,7 +322,6 @@ export default function OrderTrackingPage({
           )}
         </section>
 
-        {/* Pagamento */}
         <section className="rounded-2xl border bg-white p-4 shadow-sm">
           <h2 className="text-lg font-bold">Pagamento</h2>
 
@@ -325,17 +349,9 @@ export default function OrderTrackingPage({
                 Se precisar, finalize o pagamento combinando via WhatsApp.
               </p>
             ) : null}
-
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-zinc-600">Pago</p>
-              <p className="text-sm font-bold text-zinc-900">
-                {order.paid ? "Sim" : "Não"}
-              </p>
-            </div>
           </div>
         </section>
 
-        {/* Resumo */}
         <section className="rounded-2xl border bg-white p-4 shadow-sm">
           <h2 className="text-lg font-bold">Resumo</h2>
 
@@ -374,7 +390,6 @@ export default function OrderTrackingPage({
           </div>
         </section>
 
-        {/* Entrega */}
         <section className="rounded-2xl border bg-white p-4 shadow-sm">
           <h2 className="text-lg font-bold">Entrega</h2>
 
