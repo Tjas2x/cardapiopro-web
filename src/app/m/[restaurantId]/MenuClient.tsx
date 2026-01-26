@@ -28,6 +28,8 @@ type CartItem = {
 
 type ToastType = "success" | "error" | "info";
 
+type PaymentMethod = "PIX" | "CARD_CREDIT" | "CARD_DEBIT" | "CASH";
+
 function formatBRL(cents: number) {
   return (cents / 100).toLocaleString("pt-BR", {
     style: "currency",
@@ -52,15 +54,46 @@ function formatPhoneBR(raw: string) {
 }
 
 function sanitizePhoneForWhatsApp(phone: string) {
-  // remove tudo e tenta padronizar com 55
   const d = onlyDigits(phone);
   if (!d) return null;
 
-  // se já tiver 55 na frente e tiver 12+ dígitos, ok
   if (d.startsWith("55")) return d;
-
-  // se não tiver, assume BR
   return `55${d}`;
+}
+
+function parseBRLToCents(input: string) {
+  // aceita: "50", "50,00", "R$ 50,00"
+  const raw = String(input || "").trim();
+  if (!raw) return null;
+
+  const cleaned = raw
+    .replace(/\s/g, "")
+    .replace("R$", "")
+    .replace(/\./g, "")
+    .replace(",", ".");
+
+  const val = Number(cleaned);
+  if (!Number.isFinite(val)) return null;
+
+  const cents = Math.round(val * 100);
+  if (cents <= 0) return null;
+
+  return cents;
+}
+
+function paymentLabel(pm: PaymentMethod) {
+  switch (pm) {
+    case "PIX":
+      return "PIX";
+    case "CARD_CREDIT":
+      return "Cartão (Crédito)";
+    case "CARD_DEBIT":
+      return "Cartão (Débito)";
+    case "CASH":
+      return "Dinheiro";
+    default:
+      return pm;
+  }
 }
 
 export default function MenuClient({ restaurantId }: { restaurantId: string }) {
@@ -83,6 +116,10 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerAddress, setCustomerAddress] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // ✅ pagamento
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("PIX");
+  const [cashChangeFor, setCashChangeFor] = useState("");
 
   const [toast, setToast] = useState<{ type: ToastType; msg: string } | null>(
     null
@@ -167,7 +204,6 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
   }
 
   function syncCartWithProducts(nextProducts: Product[]) {
-    // remove do carrinho itens que sumiram ou ficaram inativos
     const map = new Map(nextProducts.map((p) => [p.id, p]));
     let changed = false;
 
@@ -189,7 +225,6 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
           continue;
         }
 
-        // atualiza snapshot do produto no carrinho (preço/descrição/imagem)
         copy[productId] = {
           ...copy[productId],
           product: exists,
@@ -227,7 +262,6 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
     });
 
     if (!p.ok) {
-      // se falhar, retorna vazio (sem crash)
       return [] as Product[];
     }
 
@@ -257,19 +291,16 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
     isFetchingRef.current = true;
 
     try {
-      // só atualiza produtos e status do restaurante
       const [r, p] = await Promise.all([fetchRestaurant(), fetchProducts()]);
       setRestaurant(r);
       setProducts(p);
       syncCartWithProducts(p);
     } catch {
-      // silencioso mesmo (não quebra)
     } finally {
       isFetchingRef.current = false;
     }
   }
 
-  // ✅ carregamento inicial + polling
   useEffect(() => {
     loadFirstTime();
 
@@ -277,7 +308,7 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
 
     pollingRef.current = setInterval(() => {
       refreshSilent();
-    }, 15000); // ✅ 15s (leve e suficiente)
+    }, 15000);
 
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current);
@@ -341,6 +372,27 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
     return errors;
   }
 
+  function validatePayment(totalCents: number) {
+    if (paymentMethod !== "CASH") return null;
+
+    // no server a gente aceita null, mas aqui é melhor recomendar.
+    // se deixar vazio, OK
+    if (!cashChangeFor.trim()) return null;
+
+    const changeForCents = parseBRLToCents(cashChangeFor);
+    if (!changeForCents) {
+      return "Informe o valor do troco (ex: 50,00) ou deixe em branco.";
+    }
+
+    if (changeForCents < totalCents) {
+      return `Troco inválido. O valor precisa ser maior ou igual ao total (${formatBRL(
+        totalCents
+      )}).`;
+    }
+
+    return null;
+  }
+
   async function finalizeOrder() {
     if (!restaurant) {
       showToast("error", "Cardápio ainda não carregou.");
@@ -363,16 +415,20 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
       return;
     }
 
+    const payError = validatePayment(totalCents);
+    if (payError) {
+      showToast("error", payError);
+      return;
+    }
+
     if (isSubmitting) return;
 
     try {
       setIsSubmitting(true);
       showToast("info", "Enviando pedido...");
 
-      // ✅ antes de enviar, faz uma revalidação rápida dos produtos
       const freshProducts = await fetchProducts();
 
-      // remove itens que sumiram/inativos
       const freshMap = new Map(freshProducts.map((p) => [p.id, p]));
       const safeItems = cartItems
         .map((i) => {
@@ -392,7 +448,6 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
         return;
       }
 
-      // se removeu algum, atualiza carrinho e avisa
       if (safeItems.length !== cartItems.length) {
         const next: Record<string, CartItem> = {};
         safeItems.forEach((s) => {
@@ -407,18 +462,29 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
         return;
       }
 
+      const cashChangeForCents =
+        paymentMethod === "CASH" ? parseBRLToCents(cashChangeFor) : null;
+
       const payload = {
         restaurantId: restaurant.id,
         customerName: customerName.trim(),
         customerPhone: customerPhone.trim(),
         customerAddress: customerAddress.trim(),
+        paymentMethod,
+        cashChangeForCents,
         items: safeItems.map((i) => ({
           productId: i.product.id,
           quantity: i.qty,
         })),
       };
 
-      await postWithRetry(`${API_URL}/public/orders`, payload, 2);
+      const res = await postWithRetry(`${API_URL}/public/orders`, payload, 2);
+
+      let orderId: string | null = null;
+      try {
+        const json = await res.json();
+        if (json?.orderId) orderId = String(json.orderId);
+      } catch {}
 
       showToast("success", "Pedido enviado com sucesso ✅");
 
@@ -428,6 +494,14 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
       setCustomerName("");
       setCustomerPhone("");
       setCustomerAddress("");
+      setPaymentMethod("PIX");
+      setCashChangeFor("");
+
+      if (orderId) {
+        setTimeout(() => {
+          window.location.href = `/pedido/${orderId}`;
+        }, 500);
+      }
     } catch (e: any) {
       showToast("error", e?.message || "Falha ao finalizar pedido.");
     } finally {
@@ -466,7 +540,9 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
     );
   }
 
-  const waPhone = restaurant.phone ? sanitizePhoneForWhatsApp(restaurant.phone) : null;
+  const waPhone = restaurant.phone
+    ? sanitizePhoneForWhatsApp(restaurant.phone)
+    : null;
 
   return (
     <div className="min-h-screen bg-zinc-100">
@@ -808,10 +884,70 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
 
                       <div className="border-t pt-3 flex items-center justify-between">
                         <p className="text-sm text-zinc-600">Total</p>
-                        <p className="text-lg font-bold">{formatBRL(totalCents)}</p>
+                        <p className="text-lg font-bold">
+                          {formatBRL(totalCents)}
+                        </p>
                       </div>
                     </>
                   )}
+                </div>
+
+                {/* ✅ Pagamento */}
+                <div className="mt-4 rounded-2xl border bg-zinc-50 p-4">
+                  <p className="text-sm font-bold text-zinc-900">
+                    Forma de pagamento
+                  </p>
+
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    {(
+                      [
+                        "PIX",
+                        "CARD_CREDIT",
+                        "CARD_DEBIT",
+                        "CASH",
+                      ] as PaymentMethod[]
+                    ).map((pm) => {
+                      const active = paymentMethod === pm;
+                      return (
+                        <button
+                          key={pm}
+                          onClick={() => setPaymentMethod(pm)}
+                          className={`rounded-2xl px-3 py-3 text-sm font-bold border ${
+                            active
+                              ? "bg-black text-white border-black"
+                              : "bg-white text-zinc-900 border-zinc-200"
+                          }`}
+                        >
+                          {paymentLabel(pm)}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {paymentMethod === "PIX" ? (
+                    <p className="text-xs text-zinc-600 mt-3">
+                      Você pode combinar o pagamento via WhatsApp após enviar o
+                      pedido.
+                    </p>
+                  ) : null}
+
+                  {paymentMethod === "CASH" ? (
+                    <div className="mt-3">
+                      <label className="block text-xs font-semibold text-zinc-700 mb-1">
+                        Troco para quanto? (opcional)
+                      </label>
+                      <input
+                        className="w-full rounded-xl border px-3 py-3 text-sm bg-white"
+                        placeholder="Ex: 50,00"
+                        value={cashChangeFor}
+                        onChange={(e) => setCashChangeFor(e.target.value)}
+                        inputMode="decimal"
+                      />
+                      <p className="text-xs text-zinc-500 mt-2">
+                        Se não precisar de troco, pode deixar em branco.
+                      </p>
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="mt-4 flex gap-2">
@@ -833,7 +969,8 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
                 </div>
 
                 <p className="text-xs text-zinc-500 mt-3">
-                  Se algum item ficar indisponível, ele será removido automaticamente.
+                  Se algum item ficar indisponível, ele será removido
+                  automaticamente.
                 </p>
               </div>
             </div>
