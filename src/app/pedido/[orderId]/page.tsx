@@ -28,15 +28,9 @@ type Restaurant = {
 type PublicOrder = {
   id: string;
   status: OrderStatus;
-
   customerName: string | null;
-  customerPhone?: string | null;
-
-  // ✅ campo real do banco (Prisma)
+  customerPhone: string | null;
   deliveryAddress: string | null;
-
-  // ✅ compat (caso venha do backend)
-  customerAddress?: string | null;
 
   totalCents: number;
 
@@ -268,6 +262,7 @@ export default function OrderTrackingPage({
             </span>
           </div>
 
+          {/* timeline */}
           {order.status !== "CANCELED" ? (
             <div className="mt-4 space-y-3">
               {["Recebido", "Em preparo", "Saiu para entrega", "Entregue"].map(
@@ -291,7 +286,6 @@ export default function OrderTrackingPage({
                   );
                 }
               )}
-
               <p className="text-xs text-zinc-500 mt-2">
                 A página atualiza automaticamente a cada 10 segundos.
               </p>
@@ -331,6 +325,13 @@ export default function OrderTrackingPage({
                 Se precisar, finalize o pagamento combinando via WhatsApp.
               </p>
             ) : null}
+
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-zinc-600">Pago</p>
+              <p className="text-sm font-bold text-zinc-900">
+                {order.paid ? "Sim" : "Não"}
+              </p>
+            </div>
           </div>
         </section>
 
@@ -384,9 +385,15 @@ export default function OrderTrackingPage({
               </p>
             ) : null}
 
+            {order.customerPhone ? (
+              <p className="text-sm text-zinc-800">
+                <span className="font-bold">Telefone:</span> {order.customerPhone}
+              </p>
+            ) : null}
+
             <p className="text-sm text-zinc-800">
               <span className="font-bold">Endereço:</span>{" "}
-              {order.customerAddress ?? order.deliveryAddress ?? "Não informado"}
+              {order.deliveryAddress || "Não informado"}
             </p>
 
             {order.restaurant.address ? (
