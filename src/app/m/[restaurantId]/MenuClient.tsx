@@ -362,7 +362,6 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
     ? sanitizePhoneForWhatsApp(restaurant.phone)
     : null;
 
-
   return (
     <div className="min-h-screen bg-zinc-100">
       {/* Toast */}
@@ -396,17 +395,20 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
         </a>
       ) : null}
 
+      {/* HEADER (AJUSTADO) */}
       <header className="sticky top-0 z-10 border-b bg-white/90 backdrop-blur">
-        <div className="mx-auto max-w-3xl px-4 py-4">
+        <div className="mx-auto max-w-3xl px-4 py-2">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <h1 className="text-xl font-bold tracking-tight truncate">
                 {restaurant.name || "Cardápio"}
               </h1>
 
-              <p className="text-sm text-zinc-600 mt-1">
-                {restaurant.description || "Faça seu pedido abaixo 👇"}
-              </p>
+              {restaurant.description ? (
+                <p className="text-sm text-zinc-600 mt-1 line-clamp-1">
+                  {restaurant.description}
+                </p>
+              ) : null}
 
               <div className="mt-2 flex items-center gap-2 flex-wrap">
                 <span
@@ -420,7 +422,7 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
                 </span>
 
                 {restaurant.address ? (
-                  <span className="text-xs px-2 py-1 rounded-full bg-zinc-100 text-zinc-700">
+                  <span className="text-xs px-2 py-1 rounded-full bg-zinc-100 text-zinc-700 truncate max-w-full">
                     📍 {restaurant.address}
                   </span>
                 ) : null}
@@ -433,7 +435,7 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
           </div>
 
           {/* Search + tabs */}
-          <div className="mt-4 flex flex-col gap-3">
+          <div className="mt-3 flex flex-col gap-3">
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -472,6 +474,9 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
                     : "bg-white text-zinc-900 border-zinc-200"
                 }`}
               >
+
+
+
                 Indisponíveis
               </button>
             </div>
