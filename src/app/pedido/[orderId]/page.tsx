@@ -20,7 +20,6 @@ type Order = {
   totalCents: number;
   createdAt: string;
   restaurant: {
-    id: string;
     name: string;
     phone: string | null;
     address: string | null;
@@ -105,7 +104,6 @@ export default function OrderPage() {
         cache: "no-store",
       });
 
-      // pedido ainda não indexado
       if (res.status === 404) {
         setAttempt((a) => a + 1);
         setLoading(false);
@@ -123,7 +121,6 @@ export default function OrderPage() {
       setLoading(false);
       setError(null);
 
-      // status final → para polling
       if (data.status === "DELIVERED" || data.status === "CANCELED") {
         stopPolling();
         return;
@@ -135,18 +132,6 @@ export default function OrderPage() {
       setLoading(false);
       scheduleNext();
     }
-  }
-
-  /* =========================
-     MANUAL REFRESH
-     ========================= */
-
-  function manualRefresh() {
-    stopPolling();
-    setError(null);
-    setLoading(true);
-    setAttempt((a) => a + 1);
-    fetchOrder();
   }
 
   /* =========================
@@ -170,14 +155,6 @@ export default function OrderPage() {
         <p className="text-sm text-zinc-600 mt-2">
           Tentativa {attempt}. Atualizamos automaticamente.
         </p>
-
-        <button
-          type="button"
-          onClick={manualRefresh}
-          className="mt-4 rounded-xl px-4 py-2 bg-black text-white font-bold"
-        >
-          Atualizar agora
-        </button>
       </main>
     );
   }
@@ -187,14 +164,6 @@ export default function OrderPage() {
       <main className="min-h-screen p-6">
         <h1 className="text-xl font-bold">Erro ao carregar pedido</h1>
         <p className="text-sm text-red-600 mt-2">{error}</p>
-
-        <button
-          type="button"
-          onClick={manualRefresh}
-          className="mt-4 rounded-xl px-4 py-2 bg-black text-white font-bold"
-        >
-          Tentar novamente
-        </button>
       </main>
     );
   }
@@ -202,7 +171,7 @@ export default function OrderPage() {
   if (!order) return null;
 
   /* =========================
-     RENDER ORDER
+     RENDER
      ========================= */
 
   return (
@@ -216,6 +185,10 @@ export default function OrderPage() {
         <span className="font-bold">
           {statusLabel(order.status)}
         </span>
+      </p>
+
+      <p className="text-xs text-zinc-500">
+        Atualizamos automaticamente o status do pedido.
       </p>
 
       <section className="rounded-xl border bg-white p-4">
@@ -241,28 +214,12 @@ export default function OrderPage() {
         </div>
       </section>
 
-      {(order.status !== "DELIVERED" &&
-        order.status !== "CANCELED") && (
-        <div className="space-y-3">
-          <button
-            type="button"
-            onClick={manualRefresh}
-            className="w-full rounded-xl px-4 py-3 bg-black text-white font-bold"
-          >
-            Atualizar agora
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              window.location.href = `/m/${order.restaurant.id}`;
-            }}
-            className="w-full rounded-xl px-4 py-3 border bg-white font-bold"
-          >
-            Voltar ao cardápio
-          </button>
-        </div>
-      )}
+      <a
+        href="/"
+        className="block text-center rounded-xl px-4 py-3 border bg-white font-bold"
+      >
+        Voltar ao cardápio
+      </a>
     </main>
   );
 }
