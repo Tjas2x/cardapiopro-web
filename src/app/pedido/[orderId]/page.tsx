@@ -100,59 +100,61 @@ export default function OrderTrackingPage({
 
   const [order, setOrder] = useState<PublicOrder | null>(null);
   const [loading, setLoading] = useState(true);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [attempts, setAttempts] = useState(0);
+  const [error, setError] = useState<string | null>(null);
 
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
-  const startedAtRef = useRef(Date.now());
-
-  const MAX_WAIT_MS = 2 * 60 * 1000; // 2 minutos
-  const POLL_INTERVAL = 5000;
+  const lastStatusRef = useRef<OrderStatus | null>(null);
 
   /* =========================
-     FETCH (RESILIENTE)
+     FETCH
      ========================= */
 
-  async function fetchOrder(silent = false) {
+  async function fetchOrder(showLoader = false) {
     try {
-      if (!silent) setLoading(true);
+      if (showLoader) setLoading(true);
 
       const res = await fetch(`${API_URL}/public/orders/${orderId}`, {
         cache: "no-store",
+        headers: { "Cache-Control": "no-cache" },
       });
 
-      // 🔁 404 = pedido ainda sendo criado (estado transitório)
-      if (res.status === 404) {
-        setAttempts((a) => a + 1);
-        setErrorMsg(null);
-        return;
-      }
-
       if (!res.ok) {
-        const txt = await res.text().catch(() => "");
-        throw new Error(`Erro ${res.status}: ${txt}`);
+        if (res.status === 404) {
+          throw new Error("Pedido ainda não disponível.");
+        }
+        throw new Error(`Erro ${res.status}`);
       }
 
       const data: PublicOrder = await res.json();
-      setOrder(data);
-      setErrorMsg(null);
+
+      // 🔥 força update apenas se algo mudou
+      if (lastStatusRef.current !== data.status) {
+        lastStatusRef.current = data.status;
+        setOrder(data);
+      } else {
+        setOrder((prev) => prev ?? data);
+      }
+
+      setError(null);
     } catch (err: any) {
-      setErrorMsg(err?.message || "Falha ao carregar pedido.");
+      setError(err?.message || "Erro ao carregar pedido");
     } finally {
-      if (!silent) setLoading(false);
+      setLoading(false);
     }
   }
 
   /* =========================
-     EFFECTS
+     EFFECT
      ========================= */
 
   useEffect(() => {
-    fetchOrder(false);
+    // primeira tentativa
+    fetchOrder(true);
 
+    // polling real
     pollingRef.current = setInterval(() => {
-      fetchOrder(true);
-    }, POLL_INTERVAL);
+      fetchOrder(false);
+    }, 5000);
 
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current);
@@ -160,123 +162,131 @@ export default function OrderTrackingPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderId]);
 
-  const timedOut = useMemo(() => {
-    return Date.now() - startedAtRef.current > MAX_WAIT_MS;
-  }, [attempts]);
+  /* =========================
+     MEMOS
+     ========================= */
+
+  const totalItems = useMemo(() => {
+    if (!order) return 0;
+    return order.items.reduce((acc, it) => acc + it.quantity, 0);
+  }, [order]);
 
   const waPhone = useMemo(() => {
-    if (!order?.restaurant?.phone) return null;
+    if (!order?.restaurant.phone) return null;
     return sanitizePhoneForWhatsApp(order.restaurant.phone);
   }, [order]);
 
   /* =========================
-     RENDER STATES
+     STATES
      ========================= */
 
   if (loading && !order) {
     return (
       <main className="min-h-screen bg-zinc-100">
         <div className="mx-auto max-w-3xl px-4 py-10">
-          <h1 className="text-xl font-bold">Pedido sendo processado…</h1>
+          <h1 className="text-xl font-bold">Processando pedido…</h1>
           <p className="text-sm text-zinc-600 mt-2">
-            Aguarde alguns segundos. Isso pode levar um instante.
+            Aguarde alguns segundos. Seu pedido está sendo registrado.
           </p>
         </div>
       </main>
     );
   }
 
-  if (!order && timedOut) {
+  if (error && !order) {
     return (
       <main className="min-h-screen bg-zinc-100">
         <div className="mx-auto max-w-3xl px-4 py-10">
-          <h1 className="text-xl font-bold">Ainda estamos processando</h1>
-          <p className="text-sm text-zinc-700 mt-2">
-            Seu pedido foi enviado, mas está demorando mais que o normal.
-          </p>
+          <h1 className="text-xl font-bold">Aguardando pedido</h1>
+          <p className="text-sm text-zinc-600 mt-2">{error}</p>
 
           <button
-            type="button"
-            onClick={() => fetchOrder(false)}
+            onClick={() => fetchOrder(true)}
             className="mt-4 rounded-2xl px-4 py-3 text-sm font-bold bg-black text-white"
           >
-            Tentar novamente
+            Atualizar
           </button>
         </div>
       </main>
     );
   }
 
-  if (!order) {
-    return (
-      <main className="min-h-screen bg-zinc-100">
-        <div className="mx-auto max-w-3xl px-4 py-10">
-          <h1 className="text-xl font-bold">Pedido sendo criado…</h1>
-          <p className="text-sm text-zinc-600 mt-2">
-            Tentativa {attempts + 1}. Atualizamos automaticamente.
-          </p>
-        </div>
-      </main>
-    );
-  }
+  if (!order) return null;
 
   /* =========================
-     MAIN RENDER
+     RENDER
      ========================= */
 
   return (
     <main className="min-h-screen bg-zinc-100 pb-10">
-      {/* HEADER (ajustamos depois) */}
       <header className="border-b bg-white">
-        <div className="mx-auto max-w-3xl px-4 py-3">
-          <h1 className="text-lg font-bold">Acompanhar pedido</h1>
-          <p className="text-sm text-zinc-600">{order.restaurant.name}</p>
+        <div className="mx-auto max-w-3xl px-4 py-4 flex justify-between items-start">
+          <div>
+            <h1 className="text-lg font-bold">Acompanhar pedido</h1>
+            <p className="text-sm text-zinc-600">{order.restaurant.name}</p>
+            <p className="text-xs text-zinc-500">
+              Pedido #{order.id.slice(0, 8)}
+            </p>
+          </div>
+
+          <button
+            onClick={() => fetchOrder(true)}
+            className="rounded-xl px-4 py-2 text-sm font-bold border bg-white"
+          >
+            Atualizar
+          </button>
         </div>
       </header>
 
-      {/* WhatsApp */}
-      {waPhone && (
+      {waPhone ? (
         <a
           href={`https://wa.me/${waPhone}?text=${encodeURIComponent(
             `Olá! Meu pedido é ${order.id}.`
           )}`}
           target="_blank"
           rel="noreferrer"
-          className="fixed bottom-6 right-4 rounded-full px-4 py-3 bg-green-600 text-white font-bold shadow-lg"
+          className="fixed bottom-6 right-4 z-50 rounded-full px-4 py-3 bg-green-600 text-white font-bold shadow-lg"
         >
           WhatsApp
         </a>
-      )}
+      ) : null}
 
       <div className="mx-auto max-w-3xl px-4 py-6 space-y-4">
-        <section className="rounded-2xl border bg-white p-4 shadow-sm">
+        <section className="rounded-2xl border bg-white p-4">
           <h2 className="text-lg font-bold mb-2">Status</h2>
           <p className="text-sm font-semibold">
             {statusLabel(order.status)}
           </p>
+          <p className="text-xs text-zinc-500 mt-2">
+            Atualização automática a cada 5 segundos.
+          </p>
         </section>
 
-        <section className="rounded-2xl border bg-white p-4 shadow-sm">
+        <section className="rounded-2xl border bg-white p-4">
           <h2 className="text-lg font-bold">Resumo</h2>
 
-          <div className="mt-2 flex justify-between text-sm">
+          <div className="mt-3 flex justify-between text-sm">
             <span>Itens</span>
-            <span>{order.items.length}</span>
+            <span className="font-bold">{totalItems}</span>
           </div>
 
-          <div className="mt-2 flex justify-between font-bold">
+          <div className="mt-2 flex justify-between text-sm">
             <span>Total</span>
-            <span>{formatBRL(order.totalCents)}</span>
+            <span className="font-bold">{formatBRL(order.totalCents)}</span>
           </div>
-        </section>
 
-        <section className="rounded-2xl border bg-white p-4 shadow-sm">
-          <h2 className="text-lg font-bold">Entrega</h2>
-
-          <p className="text-sm mt-1">
-            <strong>Endereço:</strong>{" "}
-            {order.deliveryAddress || "Não informado"}
-          </p>
+          <div className="mt-4 border-t pt-3 space-y-2">
+            {order.items.map((it) => (
+              <div key={it.id} className="flex justify-between text-sm">
+                <span>
+                  {it.quantity}× {it.nameSnapshot}
+                </span>
+                <span className="font-semibold">
+                  {formatBRL(it.unitPriceCents * it.quantity)}
+                </span>
+              </div>
+            ))}
+          </div>
         </section>
       </div>
     </main>
