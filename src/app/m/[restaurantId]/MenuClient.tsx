@@ -2,6 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+/* =========================
+   TYPES
+   ========================= */
+
 type Restaurant = {
   id: string;
   name: string;
@@ -27,8 +31,11 @@ type CartItem = {
 };
 
 type ToastType = "success" | "error" | "info";
-
 type PaymentMethod = "PIX" | "CARD_CREDIT" | "CARD_DEBIT" | "CASH";
+
+/* =========================
+   HELPERS
+   ========================= */
 
 function formatBRL(cents: number) {
   return (cents / 100).toLocaleString("pt-BR", {
@@ -41,34 +48,24 @@ function onlyDigits(s: string) {
   return String(s || "").replace(/\D/g, "");
 }
 
-// (99) 99999-9999
 function formatPhoneBR(raw: string) {
   const d = onlyDigits(raw).slice(0, 11);
-
   if (d.length <= 2) return d ? `(${d}` : "";
   if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`;
   if (d.length <= 10)
     return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`;
-
   return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`;
 }
 
 function sanitizePhoneForWhatsApp(phone: string) {
-  // remove tudo e tenta padronizar com 55
   const d = onlyDigits(phone);
   if (!d) return null;
-
-  // se já tiver 55 na frente e tiver 12+ dígitos, ok
   if (d.startsWith("55")) return d;
-
-  // se não tiver, assume BR
   return `55${d}`;
 }
 
 function parseBRLToCents(input: string) {
-  // aceita "50", "50,00", "R$ 50,00"
   const raw = String(input || "").trim();
-
   if (!raw) return null;
 
   const cleaned = raw
@@ -82,7 +79,6 @@ function parseBRLToCents(input: string) {
 
   const cents = Math.round(val * 100);
   if (cents <= 0) return null;
-
   return cents;
 }
 
@@ -100,6 +96,10 @@ function paymentLabel(pm: PaymentMethod) {
       return pm;
   }
 }
+
+/* =========================
+   COMPONENT
+   ========================= */
 
 export default function MenuClient({ restaurantId }: { restaurantId: string }) {
   const API_URL =
@@ -120,11 +120,11 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerAddress, setCustomerAddress] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // ✅ pagamento
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("PIX");
   const [cashChangeFor, setCashChangeFor] = useState("");
+
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [toast, setToast] = useState<{ type: ToastType; msg: string } | null>(
     null
@@ -136,9 +136,7 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
 
   function showToast(type: ToastType, msg: string) {
     setToast({ type, msg });
-
     if (toastTimer.current) clearTimeout(toastTimer.current);
-
     toastTimer.current = setTimeout(() => {
       setToast(null);
       toastTimer.current = null;
@@ -147,16 +145,17 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
 
   const cartItems = useMemo(() => Object.values(cart), [cart]);
 
-  const totalCents = useMemo(() => {
-    return cartItems.reduce(
-      (acc, item) => acc + item.product.priceCents * item.qty,
-      0
-    );
-  }, [cartItems]);
+  const totalCents = useMemo(
+    () =>
+      cartItems.reduce(
+        (acc, item) => acc + item.product.priceCents * item.qty,
+        0
+      ),
+    [cartItems]
+  );
 
   const productsFiltered = useMemo(() => {
     const q = search.trim().toLowerCase();
-
     let list = products;
 
     if (tab === "ACTIVE") list = list.filter((p) => p.active);
@@ -164,24 +163,19 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
 
     if (!q) return list;
 
-    return list.filter((p) => {
-      const a = p.name.toLowerCase();
-      const b = (p.description || "").toLowerCase();
-      return a.includes(q) || b.includes(q);
-    });
+    return list.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        (p.description || "").toLowerCase().includes(q)
+    );
   }, [products, search, tab]);
 
   function addProduct(p: Product) {
     if (!p.active) return;
-
     setCart((prev) => {
       const existing = prev[p.id];
       const nextQty = (existing?.qty ?? 0) + 1;
-
-      return {
-        ...prev,
-        [p.id]: { product: p, qty: nextQty },
-      };
+      return { ...prev, [p.id]: { product: p, qty: nextQty } };
     });
   }
 
@@ -189,18 +183,13 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
     setCart((prev) => {
       const existing = prev[p.id];
       if (!existing) return prev;
-
       const nextQty = existing.qty - 1;
       if (nextQty <= 0) {
         const copy = { ...prev };
         delete copy[p.id];
         return copy;
       }
-
-      return {
-        ...prev,
-        [p.id]: { product: p, qty: nextQty },
-      };
+      return { ...prev, [p.id]: { product: p, qty: nextQty } };
     });
   }
 
@@ -209,86 +198,43 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
   }
 
   function syncCartWithProducts(nextProducts: Product[]) {
-    // remove do carrinho itens que sumiram ou ficaram inativos
     const map = new Map(nextProducts.map((p) => [p.id, p]));
-    let changed = false;
-
     setCart((prev) => {
       const copy = { ...prev };
-
-      for (const productId of Object.keys(copy)) {
-        const exists = map.get(productId);
-
-        if (!exists) {
-          delete copy[productId];
-          changed = true;
-          continue;
-        }
-
-        if (!exists.active) {
-          delete copy[productId];
-          changed = true;
-          continue;
-        }
-
-        // atualiza snapshot do produto no carrinho (preço/descrição/imagem)
-        copy[productId] = {
-          ...copy[productId],
-          product: exists,
-        };
+      for (const id of Object.keys(copy)) {
+        const exists = map.get(id);
+        if (!exists || !exists.active) delete copy[id];
+        else copy[id] = { ...copy[id], product: exists };
       }
-
       return copy;
     });
-
-    if (changed) {
-      showToast(
-        "info",
-        "Alguns itens ficaram indisponíveis e foram removidos do carrinho."
-      );
-    }
   }
 
   async function fetchRestaurant() {
     const r = await fetch(`${API_URL}/restaurants/${restaurantId}`, {
       cache: "no-store",
     });
-
-    if (!r.ok) {
-      const txt = await r.text().catch(() => "");
-      throw new Error(`Erro ao carregar restaurante (${r.status}). ${txt}`);
-    }
-
-    const data: Restaurant = await r.json();
-    return data;
+    if (!r.ok) throw new Error("Erro ao carregar restaurante");
+    return (await r.json()) as Restaurant;
   }
 
   async function fetchProducts() {
-    const p = await fetch(`${API_URL}/restaurants/${restaurantId}/products`, {
+    const r = await fetch(`${API_URL}/restaurants/${restaurantId}/products`, {
       cache: "no-store",
     });
-
-    if (!p.ok) {
-      // se falhar, retorna vazio (sem crash)
-      return [] as Product[];
-    }
-
-    const data: Product[] = await p.json();
-    return data;
+    if (!r.ok) return [];
+    return (await r.json()) as Product[];
   }
 
   async function loadFirstTime() {
     try {
       setLoadingFirst(true);
-      setLoadError(null);
-
       const [r, p] = await Promise.all([fetchRestaurant(), fetchProducts()]);
-
       setRestaurant(r);
       setProducts(p);
       syncCartWithProducts(p);
     } catch (e: any) {
-      setLoadError(e?.message || "Falha ao carregar cardápio.");
+      setLoadError(e?.message || "Falha ao carregar cardápio");
     } finally {
       setLoadingFirst(false);
     }
@@ -297,273 +243,90 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
   async function refreshSilent() {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
-
     try {
       const [r, p] = await Promise.all([fetchRestaurant(), fetchProducts()]);
       setRestaurant(r);
       setProducts(p);
       syncCartWithProducts(p);
-    } catch {
-      // silencioso
+      showToast("info", "Cardápio atualizado");
     } finally {
       isFetchingRef.current = false;
     }
   }
 
-  // ✅ carregamento inicial + polling
   useEffect(() => {
     loadFirstTime();
-
-    if (pollingRef.current) clearInterval(pollingRef.current);
-
-    pollingRef.current = setInterval(() => {
-      refreshSilent();
-    }, 15000);
-
+    pollingRef.current = setInterval(refreshSilent, 15000);
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current);
-      pollingRef.current = null;
-
       if (toastTimer.current) clearTimeout(toastTimer.current);
-      toastTimer.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restaurantId]);
 
-  async function postWithRetry(url: string, body: any, tries = 2) {
-    let lastError: any;
-
-    for (let attempt = 1; attempt <= tries; attempt++) {
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 20000);
-
-        const res = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
-
-        clearTimeout(timeout);
-
-        if (res.ok) return res;
-
-        const txt = await res.text().catch(() => "");
-        throw new Error(`Erro (${res.status}): ${txt}`);
-      } catch (err: any) {
-        lastError = err;
-
-        const msg = String(err?.message || err);
-        const isRetryable =
-          msg.includes("aborted") ||
-          msg.includes("AbortError") ||
-          msg.includes("Network request failed") ||
-          msg.includes("Failed to fetch");
-
-        if (!isRetryable) break;
-
-        await new Promise((r) => setTimeout(r, 800));
-      }
-    }
-
-    throw lastError;
-  }
-
-  function validateCustomer() {
-    const errors: { field: string; msg: string }[] = [];
-
-    if (!customerName.trim()) errors.push({ field: "name", msg: "Nome" });
-    if (onlyDigits(customerPhone).length < 10)
-      errors.push({ field: "phone", msg: "Telefone válido" });
-    if (!customerAddress.trim())
-      errors.push({ field: "address", msg: "Endereço" });
-
-    return errors;
-  }
-
-  function validatePayment(totalCents: number) {
-    if (paymentMethod !== "CASH") return null;
-
-    // Se CASH e vazio, deixa passar (sem troco)
-    if (!String(cashChangeFor || "").trim()) return null;
-
-    const changeForCents = parseBRLToCents(cashChangeFor);
-    if (!changeForCents) {
-      return "Informe o valor do troco (ex: 50,00).";
-    }
-
-    if (changeForCents < totalCents) {
-      return `Troco inválido. O valor precisa ser maior ou igual ao total (${formatBRL(
-        totalCents
-      )}).`;
-    }
-
-    return null;
-  }
-
   async function finalizeOrder() {
-    if (!restaurant) {
-      showToast("error", "Cardápio ainda não carregou.");
-      return;
-    }
-
-    if (!restaurant.isOpen) {
-      showToast("error", "Restaurante está fechado no momento.");
-      return;
-    }
-
-    if (cartItems.length === 0) {
-      showToast("error", "Seu carrinho está vazio.");
-      return;
-    }
-
-    const errors = validateCustomer();
-    if (errors.length > 0) {
-      showToast("error", `Preencha: ${errors.map((e) => e.msg).join(", ")}.`);
-      return;
-    }
-
-    const payError = validatePayment(totalCents);
-    if (payError) {
-      showToast("error", payError);
-      return;
-    }
-
     if (isSubmitting) return;
+
+    if (!restaurant?.isOpen)
+      return showToast("error", "Restaurante fechado");
+    if (!cartItems.length)
+      return showToast("error", "Carrinho vazio");
+    if (!customerName || onlyDigits(customerPhone).length < 10 || !customerAddress)
+      return showToast("error", "Preencha seus dados");
 
     try {
       setIsSubmitting(true);
       showToast("info", "Enviando pedido...");
 
-      // revalida produtos
-      const freshProducts = await fetchProducts();
+      const res = await fetch(`${API_URL}/public/orders`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          restaurantId,
+          customerName,
+          customerPhone,
+          customerAddress,
+          paymentMethod,
+          cashChangeForCents:
+            paymentMethod === "CASH"
+              ? parseBRLToCents(cashChangeFor)
+              : null,
+          items: cartItems.map((i) => ({
+            productId: i.product.id,
+            quantity: i.qty,
+          })),
+        }),
+      });
 
-      const freshMap = new Map(freshProducts.map((p) => [p.id, p]));
-      const safeItems = cartItems
-        .map((i) => {
-          const exists = freshMap.get(i.product.id);
-          if (!exists) return null;
-          if (!exists.active) return null;
-          return { product: exists, qty: i.qty };
-        })
-        .filter(Boolean) as { product: Product; qty: number }[];
-
-      if (safeItems.length === 0) {
-        clearCart();
-        showToast(
-          "error",
-          "Os itens do carrinho ficaram indisponíveis. Selecione novamente."
-        );
-        return;
-      }
-
-      if (safeItems.length !== cartItems.length) {
-        const next: Record<string, CartItem> = {};
-        safeItems.forEach((s) => {
-          next[s.product.id] = { product: s.product, qty: s.qty };
-        });
-        setCart(next);
-
-        showToast(
-          "info",
-          "Alguns itens ficaram indisponíveis e foram removidos do carrinho."
-        );
-        return;
-      }
-
-      let cashChangeForCents: number | null = null;
-
-      if (paymentMethod === "CASH") {
-        const parsed = parseBRLToCents(cashChangeFor);
-        cashChangeForCents = parsed ?? null;
-      }
-
-      const payload = {
-        restaurantId: restaurant.id,
-        customerName: customerName.trim(),
-        customerPhone: customerPhone.trim(),
-        customerAddress: customerAddress.trim(),
-
-        paymentMethod,
-        cashChangeForCents,
-
-        items: safeItems.map((i) => ({
-          productId: i.product.id,
-          quantity: i.qty,
-        })),
-      };
-
-      const res = await postWithRetry(`${API_URL}/public/orders`, payload, 2);
-
-      // ✅ FIX: aceita {orderId} OU {id} OU {order:{id}}
-      let createdOrderId: string | null = null;
-      try {
-        const json = await res.json();
-        const raw = json?.orderId || json?.id || json?.order?.id || null;
-        if (raw) createdOrderId = String(raw);
-      } catch {
-        createdOrderId = null;
-      }
+      const json = await res.json();
+      const orderId = json?.orderId || json?.id || json?.order?.id;
 
       showToast("success", "Pedido enviado com sucesso ✅");
 
-      setCart({});
-      setCartOpen(false);
-
-      setCustomerName("");
-      setCustomerPhone("");
-      setCustomerAddress("");
-      setPaymentMethod("PIX");
-      setCashChangeFor("");
-
-      // ✅ tracking
-      if (createdOrderId) {
-        setTimeout(() => {
-          window.location.href = `/pedido/${createdOrderId}`;
-        }, 600);
+      if (orderId) {
+        window.location.assign(`/pedido/${orderId}`);
       }
     } catch (e: any) {
-      showToast("error", e?.message || "Falha ao finalizar pedido.");
-    } finally {
+      showToast("error", e?.message || "Erro ao enviar pedido");
       setIsSubmitting(false);
     }
   }
 
+  /* =========================
+     RENDER
+     ========================= */
+
   if (loadingFirst) {
-    return (
-      <main className="min-h-screen bg-zinc-100">
-        <div className="mx-auto max-w-3xl px-4 py-8">
-          <h1 className="text-xl font-bold">Carregando cardápio...</h1>
-          <p className="text-sm text-zinc-600 mt-2">
-            Carregando restaurante e produtos...
-          </p>
-        </div>
-      </main>
-    );
+    return <div className="p-6">Carregando cardápio...</div>;
   }
 
-  if (loadError || !restaurant) {
-    return (
-      <main className="min-h-screen bg-zinc-100">
-        <div className="mx-auto max-w-3xl px-4 py-8">
-          <h1 className="text-xl font-bold">Não foi possível carregar</h1>
-          <p className="text-sm text-zinc-700 mt-2">{loadError}</p>
-
-          <button
-            onClick={loadFirstTime}
-            className="mt-4 rounded-xl px-4 py-2 text-sm font-semibold bg-black text-white"
-          >
-            Tentar novamente
-          </button>
-        </div>
-      </main>
-    );
+  if (!restaurant || loadError) {
+    return <div className="p-6">Erro ao carregar cardápio</div>;
   }
 
   const waPhone = restaurant.phone
     ? sanitizePhoneForWhatsApp(restaurant.phone)
     : null;
+
 
   return (
     <div className="min-h-screen bg-zinc-100">
