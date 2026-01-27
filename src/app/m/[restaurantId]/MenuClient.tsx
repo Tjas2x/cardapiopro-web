@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 /* =========================
    Types
 ========================= */
+
 type Restaurant = {
   id: string;
   name: string;
@@ -21,6 +22,7 @@ type Product = {
   priceCents: number;
   imageUrl: string | null;
   active: boolean;
+  restaurantId: string;
 };
 
 type CartItem = {
@@ -28,13 +30,14 @@ type CartItem = {
   qty: number;
 };
 
-type PaymentMethod = "PIX" | "CARD_CREDIT" | "CARD_DEBIT" | "CASH";
-
 type ToastType = "success" | "error" | "info";
+
+type PaymentMethod = "PIX" | "CARD_CREDIT" | "CARD_DEBIT" | "CASH";
 
 /* =========================
    Helpers
 ========================= */
+
 function formatBRL(cents: number) {
   return (cents / 100).toLocaleString("pt-BR", {
     style: "currency",
@@ -58,7 +61,27 @@ function formatPhoneBR(raw: string) {
 function sanitizePhoneForWhatsApp(phone: string) {
   const d = onlyDigits(phone);
   if (!d) return null;
-  return d.startsWith("55") ? d : `55${d}`;
+  if (d.startsWith("55")) return d;
+  return `55${d}`;
+}
+
+function parseBRLToCents(input: string) {
+  const raw = String(input || "").trim();
+  if (!raw) return null;
+
+  const cleaned = raw
+    .replace(/\s/g, "")
+    .replace("R$", "")
+    .replace(/\./g, "")
+    .replace(",", ".");
+
+  const val = Number(cleaned);
+  if (!Number.isFinite(val)) return null;
+
+  const cents = Math.round(val * 100);
+  if (cents <= 0) return null;
+
+  return cents;
 }
 
 function paymentLabel(pm: PaymentMethod) {
@@ -71,12 +94,15 @@ function paymentLabel(pm: PaymentMethod) {
       return "Cartão (Débito)";
     case "CASH":
       return "Dinheiro";
+    default:
+      return pm;
   }
 }
 
 /* =========================
    Component
 ========================= */
+
 export default function MenuClient({ restaurantId }: { restaurantId: string }) {
   const API_URL =
     process.env.NEXT_PUBLIC_API_URL ||
@@ -84,8 +110,8 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
 
   const [restaurant, setRestaurant] = useState<Restaurant | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [loadingFirst, setLoadingFirst] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState<"ALL" | "ACTIVE" | "INACTIVE">("ALL");
@@ -101,256 +127,301 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
     useState<PaymentMethod>("PIX");
   const [cashChangeFor, setCashChangeFor] = useState("");
 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   const [toast, setToast] = useState<{ type: ToastType; msg: string } | null>(
     null
   );
+
   const toastTimer = useRef<NodeJS.Timeout | null>(null);
+  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const isFetchingRef = useRef(false);
 
   function showToast(type: ToastType, msg: string) {
     setToast({ type, msg });
     if (toastTimer.current) clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(null), 3000);
+    toastTimer.current = setTimeout(() => setToast(null), 3200);
   }
 
-  /* =========================
-     Data
-  ========================= */
-  async function loadData() {
-    try {
-      setLoading(true);
-      const [r, p] = await Promise.all([
-        fetch(`${API_URL}/restaurants/${restaurantId}`).then((r) => r.json()),
-        fetch(`${API_URL}/restaurants/${restaurantId}/products`).then((p) =>
-          p.json()
-        ),
-      ]);
-      setRestaurant(r);
-      setProducts(p);
-    } catch {
-      setError("Não foi possível carregar o cardápio.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    loadData();
-  }, [restaurantId]);
-
-  /* =========================
-     Cart
-  ========================= */
   const cartItems = useMemo(() => Object.values(cart), [cart]);
 
   const totalCents = useMemo(
     () =>
       cartItems.reduce(
-        (acc, i) => acc + i.product.priceCents * i.qty,
+        (acc, item) => acc + item.product.priceCents * item.qty,
         0
       ),
     [cartItems]
   );
 
-  function addProduct(p: Product) {
-    if (!p.active) return;
-    setCart((prev) => ({
-      ...prev,
-      [p.id]: { product: p, qty: (prev[p.id]?.qty || 0) + 1 },
-    }));
-  }
-
-  function removeProduct(p: Product) {
-    setCart((prev) => {
-      const q = (prev[p.id]?.qty || 0) - 1;
-      if (q <= 0) {
-        const c = { ...prev };
-        delete c[p.id];
-        return c;
-      }
-      return { ...prev, [p.id]: { product: p, qty: q } };
-    });
-  }
-
-  /* =========================
-     Filters
-  ========================= */
-  const filteredProducts = useMemo(() => {
+  const productsFiltered = useMemo(() => {
+    const q = search.trim().toLowerCase();
     let list = products;
     if (tab === "ACTIVE") list = list.filter((p) => p.active);
     if (tab === "INACTIVE") list = list.filter((p) => !p.active);
-    if (!search) return list;
-    const q = search.toLowerCase();
+    if (!q) return list;
     return list.filter(
       (p) =>
         p.name.toLowerCase().includes(q) ||
         (p.description || "").toLowerCase().includes(q)
     );
-  }, [products, tab, search]);
+  }, [products, search, tab]);
 
-  /* =========================
-     UI
-  ========================= */
-  if (loading)
-    return (
-      <main className="min-h-screen bg-zinc-100 p-4">
-        <p className="text-sm text-zinc-600">Carregando cardápio…</p>
-      </main>
-    );
+  function addProduct(p: Product) {
+    if (!p.active) return;
+    setCart((prev) => ({
+      ...prev,
+      [p.id]: { product: p, qty: (prev[p.id]?.qty ?? 0) + 1 },
+    }));
+  }
 
-  if (error || !restaurant)
-    return (
-      <main className="min-h-screen bg-zinc-100 p-4">
-        <p className="text-sm text-red-600">{error}</p>
-      </main>
+  function removeProduct(p: Product) {
+    setCart((prev) => {
+      const existing = prev[p.id];
+      if (!existing) return prev;
+      if (existing.qty <= 1) {
+        const copy = { ...prev };
+        delete copy[p.id];
+        return copy;
+      }
+      return {
+        ...prev,
+        [p.id]: { product: p, qty: existing.qty - 1 },
+      };
+    });
+  }
+
+  function clearCart() {
+    setCart({});
+  }
+
+  async function fetchRestaurant() {
+    const r = await fetch(`${API_URL}/restaurants/${restaurantId}`, {
+      cache: "no-store",
+    });
+    if (!r.ok) throw new Error("Erro ao carregar restaurante");
+    return (await r.json()) as Restaurant;
+  }
+
+  async function fetchProducts() {
+    const r = await fetch(
+      `${API_URL}/restaurants/${restaurantId}/products`,
+      { cache: "no-store" }
     );
+    if (!r.ok) return [];
+    return (await r.json()) as Product[];
+  }
+
+  async function loadFirstTime() {
+    try {
+      setLoadingFirst(true);
+      const [r, p] = await Promise.all([
+        fetchRestaurant(),
+        fetchProducts(),
+      ]);
+      setRestaurant(r);
+      setProducts(p);
+    } catch (e: any) {
+      setLoadError(e?.message || "Falha ao carregar cardápio");
+    } finally {
+      setLoadingFirst(false);
+    }
+  }
+
+  async function refreshSilent() {
+    if (isFetchingRef.current) return;
+    isFetchingRef.current = true;
+    try {
+      const [r, p] = await Promise.all([
+        fetchRestaurant(),
+        fetchProducts(),
+      ]);
+      setRestaurant(r);
+      setProducts(p);
+    } finally {
+      isFetchingRef.current = false;
+    }
+  }
+
+  useEffect(() => {
+    loadFirstTime();
+    pollingRef.current = setInterval(refreshSilent, 15000);
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
+  }, [restaurantId]);
+
+  function validateCustomer() {
+    if (!customerName.trim()) return "Informe seu nome";
+    if (onlyDigits(customerPhone).length < 10)
+      return "Informe um telefone válido";
+    if (!customerAddress.trim()) return "Informe o endereço";
+    return null;
+  }
+
+  async function finalizeOrder() {
+    if (!restaurant || !restaurant.isOpen) {
+      showToast("error", "Restaurante fechado");
+      return;
+    }
+    if (cartItems.length === 0) {
+      showToast("error", "Carrinho vazio");
+      return;
+    }
+
+    const err = validateCustomer();
+    if (err) {
+      showToast("error", err);
+      return;
+    }
+
+    setIsSubmitting(true);
+    showToast("info", "Enviando pedido...");
+
+    try {
+      const payload = {
+        restaurantId: restaurant.id,
+        customerName,
+        customerPhone,
+        customerAddress,
+        paymentMethod,
+        cashChangeForCents:
+          paymentMethod === "CASH"
+            ? parseBRLToCents(cashChangeFor)
+            : null,
+        items: cartItems.map((i) => ({
+          productId: i.product.id,
+          quantity: i.qty,
+        })),
+      };
+
+      const res = await fetch(`${API_URL}/public/orders`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      const json = await res.json();
+      const orderId = json?.orderId || json?.id || json?.order?.id;
+
+      showToast("success", "Pedido enviado ✅");
+
+      if (orderId) {
+        setTimeout(() => {
+          window.location.href = `/pedido/${orderId}`;
+        }, 500);
+      }
+    } catch {
+      showToast("error", "Pedido enviado, mas tracking ainda não disponível");
+    } finally {
+      setIsSubmitting(false);
+      setCartOpen(false);
+      clearCart();
+    }
+  }
+
+  if (loadingFirst) {
+    return <p className="p-6">Carregando cardápio...</p>;
+  }
+
+  if (loadError || !restaurant) {
+    return <p className="p-6">{loadError}</p>;
+  }
 
   const waPhone = restaurant.phone
     ? sanitizePhoneForWhatsApp(restaurant.phone)
     : null;
 
   return (
-    <div className="min-h-screen bg-zinc-100 pb-40">
-      {/* ===== HEADER COMPACTO ===== */}
-      <header className="sticky top-0 z-10 border-b bg-white">
-        <div className="mx-auto max-w-3xl px-4 py-2">
-          <h1 className="text-lg font-bold truncate">{restaurant.name}</h1>
-
-          <div className="flex items-center gap-2 text-xs text-zinc-600">
-            <span
-              className={`px-2 py-0.5 rounded-full font-semibold ${
-                restaurant.isOpen
-                  ? "bg-green-100 text-green-700"
-                  : "bg-red-100 text-red-700"
-              }`}
-            >
-              {restaurant.isOpen ? "Aberto" : "Fechado"}
-            </span>
-
-            {restaurant.address && (
-              <span className="truncate">📍 {restaurant.address}</span>
-            )}
-          </div>
-
-          {/* Search */}
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Buscar produto…"
-            className="mt-2 w-full rounded-xl border px-3 py-2 text-sm"
-          />
-
-          {/* Tabs */}
-          <div className="mt-2 flex gap-2">
-            {(["ALL", "ACTIVE", "INACTIVE"] as const).map((t) => (
-              <button
-                key={t}
-                onClick={() => setTab(t)}
-                className={`flex-1 rounded-xl px-3 py-1.5 text-xs font-semibold border ${
-                  tab === t
-                    ? "bg-black text-white border-black"
-                    : "bg-white text-zinc-800 border-zinc-200"
-                }`}
-              >
-                {t === "ALL"
-                  ? "Todos"
-                  : t === "ACTIVE"
-                  ? "Disponíveis"
-                  : "Indisponíveis"}
-              </button>
-            ))}
-          </div>
+    <div className="min-h-screen bg-zinc-100">
+      {/* HEADER REDUZIDO */}
+      <header className="sticky top-0 z-10 bg-white border-b">
+        <div className="mx-auto max-w-3xl px-4 py-3">
+          <h1 className="text-lg font-bold">{restaurant.name}</h1>
+          <p className="text-xs text-zinc-600">
+            {restaurant.description || "Faça seu pedido"}
+          </p>
         </div>
       </header>
 
-      {/* ===== PRODUTOS ===== */}
-      <main className="mx-auto max-w-3xl px-4 py-4 space-y-3">
-        {filteredProducts.map((p) => {
-          const qty = cart[p.id]?.qty || 0;
+      <main className="mx-auto max-w-3xl px-4 py-6 space-y-4 pb-40">
+        {productsFiltered.map((p) => {
+          const qty = cart[p.id]?.qty ?? 0;
           return (
             <div
               key={p.id}
-              className="rounded-2xl border bg-white p-3 flex gap-3"
+              className="bg-white rounded-xl border p-4 flex justify-between"
             >
-              {p.imageUrl ? (
-                <img
-                  src={p.imageUrl}
-                  className="w-20 h-20 rounded-xl object-cover"
-                />
-              ) : (
-                <div className="w-20 h-20 rounded-xl bg-zinc-100 flex items-center justify-center text-xs">
-                  Sem foto
-                </div>
-              )}
-
-              <div className="flex-1">
-                <h3 className="font-semibold">{p.name}</h3>
-                {p.description && (
-                  <p className="text-xs text-zinc-600 line-clamp-2">
-                    {p.description}
-                  </p>
-                )}
-                <p className="mt-1 font-bold text-sm">
-                  {formatBRL(p.priceCents)}
-                </p>
+              <div>
+                <p className="font-semibold">{p.name}</p>
+                <p className="text-sm">{formatBRL(p.priceCents)}</p>
               </div>
-
-              {p.active ? (
-                qty === 0 ? (
-                  <button
-                    onClick={() => addProduct(p)}
-                    className="rounded-xl px-4 py-2 text-sm font-bold bg-green-600 text-white"
-                  >
-                    Adicionar
-                  </button>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => removeProduct(p)}
-                      className="px-3 py-2 rounded-xl bg-zinc-200"
-                    >
-                      −
-                    </button>
-                    <span className="font-bold">{qty}</span>
-                    <button
-                      onClick={() => addProduct(p)}
-                      className="px-3 py-2 rounded-xl bg-green-600 text-white"
-                    >
-                      +
-                    </button>
-                  </div>
-                )
-              ) : (
-                <span className="text-xs text-zinc-500">Indisponível</span>
-              )}
+              <div className="flex items-center gap-2">
+                {qty > 0 && (
+                  <button onClick={() => removeProduct(p)}>-</button>
+                )}
+                <span>{qty}</span>
+                <button onClick={() => addProduct(p)}>+</button>
+              </div>
             </div>
           );
         })}
       </main>
 
-      {/* WhatsApp */}
-      {waPhone && (
-        <a
-          href={`https://wa.me/${waPhone}`}
-          target="_blank"
-          className="fixed bottom-24 right-4 bg-green-600 text-white px-4 py-3 rounded-full font-bold shadow-lg"
+      {/* BOTTOM BAR */}
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t p-4">
+        <button
+          onClick={() => setCartOpen(true)}
+          className="w-full bg-black text-white py-3 rounded-xl"
         >
-          WhatsApp
-        </a>
-      )}
-
-      {/* Bottom bar */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t">
-        <div className="mx-auto max-w-3xl px-4 py-3 flex gap-2">
-          <button
-            onClick={() => setCartOpen(true)}
-            className="flex-1 rounded-2xl bg-black text-white py-3 font-bold"
-          >
-            {cartItems.length === 0
-              ? "Abrir carrinho"
-              : `Carrinho • ${formatBRL(totalCents)}`}
-          </button>
-        </div>
+          Carrinho • {formatBRL(totalCents)}
+        </button>
       </div>
+
+      {/* CARRINHO */}
+      {cartOpen && (
+        <div className="fixed inset-0 bg-black/40 z-50">
+          <div className="absolute bottom-0 left-0 right-0 bg-white rounded-t-3xl p-5">
+            <h3 className="font-bold mb-2">Finalizar pedido</h3>
+
+            <input
+              placeholder="Nome"
+              className="w-full border p-2 mb-2"
+              value={customerName}
+              onChange={(e) => setCustomerName(e.target.value)}
+            />
+            <input
+              placeholder="Telefone"
+              className="w-full border p-2 mb-2"
+              value={customerPhone}
+              onChange={(e) =>
+                setCustomerPhone(formatPhoneBR(e.target.value))
+              }
+            />
+            <input
+              placeholder="Endereço"
+              className="w-full border p-2 mb-3"
+              value={customerAddress}
+              onChange={(e) => setCustomerAddress(e.target.value)}
+            />
+
+            <button
+              disabled={isSubmitting}
+              onClick={finalizeOrder}
+              className="w-full bg-green-600 text-white py-3 rounded-xl"
+            >
+              {isSubmitting ? "Enviando..." : "Finalizar pedido"}
+            </button>
+
+            <button
+              onClick={() => setCartOpen(false)}
+              className="w-full mt-2 text-sm"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
