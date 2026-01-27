@@ -134,6 +134,10 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
   const isFetchingRef = useRef(false);
 
+  /* =========================
+     TOAST
+     ========================= */
+
   function showToast(type: ToastType, msg: string) {
     setToast({ type, msg });
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -142,6 +146,10 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
       toastTimer.current = null;
     }, 3200);
   }
+
+  /* =========================
+     MEMOS
+     ========================= */
 
   const cartItems = useMemo(() => Object.values(cart), [cart]);
 
@@ -169,6 +177,10 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
         (p.description || "").toLowerCase().includes(q)
     );
   }, [products, search, tab]);
+
+  /* =========================
+     CART ACTIONS
+     ========================= */
 
   function addProduct(p: Product) {
     if (!p.active) return;
@@ -209,6 +221,10 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
       return copy;
     });
   }
+
+  /* =========================
+     FETCH
+     ========================= */
 
   async function fetchRestaurant() {
     const r = await fetch(`${API_URL}/restaurants/${restaurantId}`, {
@@ -254,14 +270,28 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
     }
   }
 
+  /* =========================
+     EFFECTS
+     ========================= */
+
   useEffect(() => {
     loadFirstTime();
     pollingRef.current = setInterval(refreshSilent, 15000);
+
+    const lastOrderId = localStorage.getItem("lastOrderId");
+    if (lastOrderId) {
+      showToast("info", "Você tem um pedido em andamento");
+    }
+
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current);
       if (toastTimer.current) clearTimeout(toastTimer.current);
     };
   }, [restaurantId]);
+
+  /* =========================
+     FINALIZE ORDER
+     ========================= */
 
   async function finalizeOrder() {
     if (isSubmitting) return;
@@ -270,7 +300,11 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
       return showToast("error", "Restaurante fechado");
     if (!cartItems.length)
       return showToast("error", "Carrinho vazio");
-    if (!customerName || onlyDigits(customerPhone).length < 10 || !customerAddress)
+    if (
+      !customerName ||
+      onlyDigits(customerPhone).length < 10 ||
+      !customerAddress
+    )
       return showToast("error", "Preencha seus dados");
 
     try {
@@ -303,6 +337,7 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
       showToast("success", "Pedido enviado com sucesso ✅");
 
       if (orderId) {
+        localStorage.setItem("lastOrderId", orderId);
         window.location.assign(`/pedido/${orderId}`);
       }
     } catch (e: any) {
