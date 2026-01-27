@@ -97,35 +97,30 @@ export default function OrderTrackingPage({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(1);
-  const [manualLoading, setManualLoading] = useState(false);
 
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
 
   /* =========================
-     FETCH
+     FETCH (VERSÃO QUE FUNCIONAVA)
      ========================= */
 
-  async function fetchOrder(showLoader = false) {
+  async function fetchOrder() {
     try {
-      if (showLoader) setManualLoading(true);
-
       const res = await fetch(`${API_URL}/public/orders/${orderId}`, {
         cache: "no-store",
       });
 
       if (!res.ok) {
-        const txt = await res.text().catch(() => "");
-        throw new Error(txt || "Pedido não encontrado");
+        return; // ← comportamento antigo: não trava, continua tentando
       }
 
       const data: PublicOrder = await res.json();
       setOrder(data);
       setError(null);
-    } catch (err: any) {
-      setError(err?.message || "Erro ao buscar pedido");
+    } catch {
+      // silencioso (como antes)
     } finally {
       setLoading(false);
-      setManualLoading(false);
     }
   }
 
@@ -133,7 +128,7 @@ export default function OrderTrackingPage({
     stopPolling();
     pollingRef.current = setInterval(() => {
       setAttempt((a) => a + 1);
-      fetchOrder(false);
+      fetchOrder();
     }, 8000);
   }
 
@@ -144,33 +139,17 @@ export default function OrderTrackingPage({
     }
   }
 
-  function forceRefresh() {
-    stopPolling();
-    setAttempt((a) => a + 1);
-    fetchOrder(true);
-    startPolling();
-  }
-
   /* =========================
-     EFFECTS
+     EFFECT
      ========================= */
 
   useEffect(() => {
-    fetchOrder(false);
+    fetchOrder();
     startPolling();
 
     return () => stopPolling();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderId]);
-
-  /* =========================
-     MEMOS
-     ========================= */
-
-  const totalItems = useMemo(() => {
-    if (!order) return 0;
-    return order.items.reduce((acc, it) => acc + it.quantity, 0);
-  }, [order]);
 
   /* =========================
      STATES
@@ -182,22 +161,11 @@ export default function OrderTrackingPage({
         <div className="mx-auto max-w-3xl px-4 py-10">
           <h1 className="text-xl font-bold">Aguardando pedido</h1>
           <p className="text-sm text-zinc-600 mt-2">
-            Seu pedido está sendo registrado...
+            Tentativa {attempt}. Atualizamos automaticamente.
           </p>
-        </div>
-      </main>
-    );
-  }
-
-  if (error && !order) {
-    return (
-      <main className="min-h-screen bg-zinc-100">
-        <div className="mx-auto max-w-3xl px-4 py-10">
-          <h1 className="text-xl font-bold">Aguardando pedido</h1>
-          <p className="text-sm text-red-600 mt-2">{error}</p>
 
           <button
-            onClick={forceRefresh}
+            onClick={fetchOrder}
             className="mt-4 rounded-xl px-4 py-3 bg-black text-white font-bold"
           >
             Atualizar agora
@@ -207,7 +175,25 @@ export default function OrderTrackingPage({
     );
   }
 
-  if (!order) return null;
+  if (!order) {
+    return (
+      <main className="min-h-screen bg-zinc-100">
+        <div className="mx-auto max-w-3xl px-4 py-10">
+          <h1 className="text-xl font-bold">Aguardando pedido</h1>
+          <p className="text-sm text-zinc-600 mt-2">
+            Tentativa {attempt}. Atualizamos automaticamente.
+          </p>
+
+          <button
+            onClick={fetchOrder}
+            className="mt-4 rounded-xl px-4 py-3 bg-black text-white font-bold"
+          >
+            Atualizar agora
+          </button>
+        </div>
+      </main>
+    );
+  }
 
   /* =========================
      RENDER
@@ -216,7 +202,6 @@ export default function OrderTrackingPage({
   return (
     <main className="min-h-screen bg-zinc-100 pb-10">
       <div className="mx-auto max-w-3xl px-4 py-6 space-y-6">
-        {/* Header */}
         <header className="space-y-2">
           <h1 className="text-xl font-bold">
             Pedido #{order.id.slice(0, 8)}
@@ -226,7 +211,6 @@ export default function OrderTrackingPage({
           </p>
         </header>
 
-        {/* Items */}
         <section className="rounded-2xl border bg-white p-4 shadow-sm">
           <h2 className="text-lg font-bold mb-3">Itens</h2>
 
@@ -254,14 +238,12 @@ export default function OrderTrackingPage({
           </div>
         </section>
 
-        {/* Actions */}
         <div className="flex flex-col gap-3">
           <button
-            onClick={forceRefresh}
-            disabled={manualLoading}
-            className="rounded-xl px-4 py-3 bg-black text-white font-bold disabled:opacity-50"
+            onClick={fetchOrder}
+            className="rounded-xl px-4 py-3 bg-black text-white font-bold"
           >
-            {manualLoading ? "Atualizando..." : "Atualizar agora"}
+            Atualizar agora
           </button>
 
           <button
@@ -272,7 +254,7 @@ export default function OrderTrackingPage({
           </button>
 
           <p className="text-xs text-zinc-500 text-center">
-            Tentativa {attempt}. Atualizamos automaticamente.
+            Atualização automática a cada 8 segundos
           </p>
         </div>
       </div>
