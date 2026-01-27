@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
+import { useParams } from "next/navigation";
 
 /* =========================
    TYPES
@@ -14,38 +14,22 @@ type OrderStatus =
   | "DELIVERED"
   | "CANCELED";
 
-type PaymentMethod = "PIX" | "CARD_CREDIT" | "CARD_DEBIT" | "CASH";
-
-type OrderItem = {
-  id: string;
-  quantity: number;
-  unitPriceCents: number;
-  nameSnapshot: string;
-};
-
-type Restaurant = {
-  id: string;
-  name: string;
-  phone: string | null;
-  address: string | null;
-};
-
-type PublicOrder = {
+type Order = {
   id: string;
   status: OrderStatus;
-  customerName: string | null;
-  customerPhone: string | null;
-  deliveryAddress: string | null;
   totalCents: number;
-
-  paymentMethod: PaymentMethod;
-  cashChangeForCents: number | null;
-  paid: boolean;
-
   createdAt: string;
-
-  restaurant: Restaurant;
-  items: OrderItem[];
+  restaurant: {
+    name: string;
+    phone: string | null;
+    address: string | null;
+  };
+  items: {
+    id: string;
+    quantity: number;
+    unitPriceCents: number;
+    nameSnapshot: string;
+  }[];
 };
 
 /* =========================
@@ -59,8 +43,8 @@ function formatBRL(cents: number) {
   });
 }
 
-function statusLabel(s: OrderStatus) {
-  switch (s) {
+function statusLabel(status: OrderStatus) {
+  switch (status) {
     case "NEW":
       return "Pedido recebido";
     case "PREPARING":
@@ -72,7 +56,7 @@ function statusLabel(s: OrderStatus) {
     case "CANCELED":
       return "Pedido cancelado";
     default:
-      return s;
+      return status;
   }
 }
 
@@ -80,28 +64,38 @@ function statusLabel(s: OrderStatus) {
    COMPONENT
    ========================= */
 
-export default function OrderTrackingPage({
-  params,
-}: {
-  params: { orderId: string };
-}) {
-  const router = useRouter();
+export default function OrderPage() {
+  const { orderId } = useParams<{ orderId: string }>();
 
   const API_URL =
     process.env.NEXT_PUBLIC_API_URL ||
     "https://cardapiopro-backend.onrender.com";
 
-  const orderId = params.orderId;
-
-  const [order, setOrder] = useState<PublicOrder | null>(null);
+  const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(1);
 
-  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   /* =========================
-     FETCH (VERSÃO QUE FUNCIONAVA)
+     POLLING CONTROL
+     ========================= */
+
+  function stopPolling() {
+    if (timerRef.current) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }
+
+  function scheduleNext() {
+    stopPolling();
+    timerRef.current = setTimeout(fetchOrder, 4000);
+  }
+
+  /* =========================
+     FETCH ORDER
      ========================= */
 
   async function fetchOrder() {
@@ -110,33 +104,48 @@ export default function OrderTrackingPage({
         cache: "no-store",
       });
 
-      if (!res.ok) {
-        return; // ← comportamento antigo: não trava, continua tentando
+      // pedido ainda não indexado
+      if (res.status === 404) {
+        setAttempt((a) => a + 1);
+        setLoading(false);
+        scheduleNext();
+        return;
       }
 
-      const data: PublicOrder = await res.json();
+      if (!res.ok) {
+        throw new Error(`Erro ${res.status}`);
+      }
+
+      const data: Order = await res.json();
+
       setOrder(data);
-      setError(null);
-    } catch {
-      // silencioso (como antes)
-    } finally {
       setLoading(false);
+      setError(null);
+
+      // status final → para polling
+      if (data.status === "DELIVERED" || data.status === "CANCELED") {
+        stopPolling();
+        return;
+      }
+
+      scheduleNext();
+    } catch (err: any) {
+      setError(err?.message || "Erro ao buscar pedido");
+      setLoading(false);
+      scheduleNext();
     }
   }
 
-  function startPolling() {
+  /* =========================
+     MANUAL REFRESH (BOTÃO)
+     ========================= */
+
+  function manualRefresh() {
     stopPolling();
-    pollingRef.current = setInterval(() => {
-      setAttempt((a) => a + 1);
-      fetchOrder();
-    }, 8000);
-  }
-
-  function stopPolling() {
-    if (pollingRef.current) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
+    setError(null);
+    setLoading(true);
+    setAttempt((a) => a + 1);
+    fetchOrder();
   }
 
   /* =========================
@@ -145,9 +154,7 @@ export default function OrderTrackingPage({
 
   useEffect(() => {
     fetchOrder();
-    startPolling();
-
-    return () => stopPolling();
+    return stopPolling;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderId]);
 
@@ -157,107 +164,92 @@ export default function OrderTrackingPage({
 
   if (loading && !order) {
     return (
-      <main className="min-h-screen bg-zinc-100">
-        <div className="mx-auto max-w-3xl px-4 py-10">
-          <h1 className="text-xl font-bold">Aguardando pedido</h1>
-          <p className="text-sm text-zinc-600 mt-2">
-            Tentativa {attempt}. Atualizamos automaticamente.
-          </p>
+      <main className="min-h-screen p-6">
+        <h1 className="text-xl font-bold">Aguardando pedido</h1>
+        <p className="text-sm text-zinc-600 mt-2">
+          Tentativa {attempt}. Atualizamos automaticamente.
+        </p>
 
-          <button
-            onClick={fetchOrder}
-            className="mt-4 rounded-xl px-4 py-3 bg-black text-white font-bold"
-          >
-            Atualizar agora
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={manualRefresh}
+          className="mt-4 rounded-xl px-4 py-2 bg-black text-white font-bold"
+        >
+          Atualizar agora
+        </button>
       </main>
     );
   }
 
-  if (!order) {
+  if (error && !order) {
     return (
-      <main className="min-h-screen bg-zinc-100">
-        <div className="mx-auto max-w-3xl px-4 py-10">
-          <h1 className="text-xl font-bold">Aguardando pedido</h1>
-          <p className="text-sm text-zinc-600 mt-2">
-            Tentativa {attempt}. Atualizamos automaticamente.
-          </p>
+      <main className="min-h-screen p-6">
+        <h1 className="text-xl font-bold">Erro ao carregar pedido</h1>
+        <p className="text-sm text-red-600 mt-2">{error}</p>
 
-          <button
-            onClick={fetchOrder}
-            className="mt-4 rounded-xl px-4 py-3 bg-black text-white font-bold"
-          >
-            Atualizar agora
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={manualRefresh}
+          className="mt-4 rounded-xl px-4 py-2 bg-black text-white font-bold"
+        >
+          Tentar novamente
+        </button>
       </main>
     );
   }
+
+  if (!order) return null;
 
   /* =========================
-     RENDER
+     RENDER ORDER
      ========================= */
 
   return (
-    <main className="min-h-screen bg-zinc-100 pb-10">
-      <div className="mx-auto max-w-3xl px-4 py-6 space-y-6">
-        <header className="space-y-2">
-          <h1 className="text-xl font-bold">
-            Pedido #{order.id.slice(0, 8)}
-          </h1>
-          <p className="text-sm text-zinc-700">
-            Status: <strong>{statusLabel(order.status)}</strong>
-          </p>
-        </header>
+    <main className="min-h-screen bg-zinc-100 p-6 space-y-4">
+      <h1 className="text-xl font-bold">
+        Pedido #{order.id.slice(0, 8)}
+      </h1>
 
-        <section className="rounded-2xl border bg-white p-4 shadow-sm">
-          <h2 className="text-lg font-bold mb-3">Itens</h2>
+      <p className="text-sm">
+        Status:{" "}
+        <span className="font-bold">
+          {statusLabel(order.status)}
+        </span>
+      </p>
 
-          <div className="space-y-2">
-            {order.items.map((it) => (
-              <div
-                key={it.id}
-                className="flex items-center justify-between text-sm"
-              >
-                <span>
-                  {it.quantity}× {it.nameSnapshot}
-                </span>
-                <span>
-                  {formatBRL(it.unitPriceCents * it.quantity)}
-                </span>
-              </div>
-            ))}
-          </div>
+      <section className="rounded-xl border bg-white p-4">
+        <h2 className="font-bold mb-2">Itens</h2>
 
-          <div className="border-t mt-3 pt-3 flex items-center justify-between">
-            <span className="font-semibold">Total</span>
-            <span className="font-bold text-lg">
-              {formatBRL(order.totalCents)}
+        {order.items.map((i) => (
+          <div
+            key={i.id}
+            className="flex justify-between text-sm py-1"
+          >
+            <span>
+              {i.quantity}× {i.nameSnapshot}
+            </span>
+            <span>
+              {formatBRL(i.unitPriceCents * i.quantity)}
             </span>
           </div>
-        </section>
+        ))}
 
-        <div className="flex flex-col gap-3">
-          <button
-            onClick={fetchOrder}
-            className="rounded-xl px-4 py-3 bg-black text-white font-bold"
-          >
-            Atualizar agora
-          </button>
-
-          <button
-            onClick={() => router.push(`/m/${order.restaurant.id}`)}
-            className="rounded-xl px-4 py-3 border bg-white font-bold"
-          >
-            Voltar ao cardápio
-          </button>
-
-          <p className="text-xs text-zinc-500 text-center">
-            Atualização automática a cada 8 segundos
-          </p>
+        <div className="border-t mt-2 pt-2 flex justify-between font-bold">
+          <span>Total</span>
+          <span>{formatBRL(order.totalCents)}</span>
         </div>
-      </div>
+      </section>
+
+      {(order.status !== "DELIVERED" &&
+        order.status !== "CANCELED") && (
+        <button
+          type="button"
+          onClick={manualRefresh}
+          className="rounded-xl px-4 py-3 bg-black text-white font-bold"
+        >
+          Atualizar agora
+        </button>
+      )}
     </main>
   );
 }
