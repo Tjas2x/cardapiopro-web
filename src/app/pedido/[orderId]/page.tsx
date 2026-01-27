@@ -20,6 +20,7 @@ type Order = {
   totalCents: number;
   createdAt: string;
   restaurant: {
+    id: string;
     name: string;
     phone: string | null;
     address: string | null;
@@ -137,7 +138,7 @@ export default function OrderPage() {
   }
 
   /* =========================
-     MANUAL REFRESH (BOTÃO)
+     MANUAL REFRESH
      ========================= */
 
   function manualRefresh() {
@@ -242,13 +243,25 @@ export default function OrderPage() {
 
       {(order.status !== "DELIVERED" &&
         order.status !== "CANCELED") && (
-        <button
-          type="button"
-          onClick={manualRefresh}
-          className="rounded-xl px-4 py-3 bg-black text-white font-bold"
-        >
-          Atualizar agora
-        </button>
+        <div className="space-y-3">
+          <button
+            type="button"
+            onClick={manualRefresh}
+            className="w-full rounded-xl px-4 py-3 bg-black text-white font-bold"
+          >
+            Atualizar agora
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              window.location.href = `/m/${order.restaurant.id}`;
+            }}
+            className="w-full rounded-xl px-4 py-3 border bg-white font-bold"
+          >
+            Voltar ao cardápio
+          </button>
+        </div>
       )}
     </main>
   );
