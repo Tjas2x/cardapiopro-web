@@ -117,17 +117,24 @@ export default function OrderTrackingPage({
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
+  // ✅ estado novo: pedido ainda não persistido no backend
+  const [waitingCreation, setWaitingCreation] = useState(false);
+
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
 
   async function fetchOrder(silent = false) {
     try {
-      if (!silent) {
-        setLoading(true);
-      }
+      if (!silent) setLoading(true);
 
       const r = await fetch(`${API_URL}/public/orders/${orderId}`, {
         cache: "no-store",
       });
+
+      // ✅ 404 TEMPORÁRIO (pedido recém-criado)
+      if (r.status === 404) {
+        setWaitingCreation(true);
+        return;
+      }
 
       if (!r.ok) {
         const txt = await r.text().catch(() => "");
@@ -137,10 +144,10 @@ export default function OrderTrackingPage({
       const data: PublicOrder = await r.json();
 
       setOrder(data);
+      setWaitingCreation(false);
       setErr(null);
     } catch (e: any) {
-      // ✅ não derruba a tela se já tinha pedido carregado
-      setErr((prev) => prev || (e?.message || "Falha ao carregar pedido."));
+      setErr((prev) => prev || e?.message || "Falha ao carregar pedido.");
     } finally {
       if (!silent) setLoading(false);
     }
@@ -174,7 +181,11 @@ export default function OrderTrackingPage({
     return sanitizePhoneForWhatsApp(order.restaurant.phone);
   }, [order]);
 
-  if (loading && !order) {
+  /* =========================
+     ESTADOS INICIAIS / ERROS
+     ========================= */
+
+  if (loading && !order && !waitingCreation) {
     return (
       <main className="min-h-screen bg-zinc-100">
         <div className="mx-auto max-w-3xl px-4 py-10">
@@ -187,7 +198,27 @@ export default function OrderTrackingPage({
     );
   }
 
-  // ✅ se deu erro mas já tem order carregado, mostra aviso mas não trava
+  if (!order && waitingCreation) {
+    return (
+      <main className="min-h-screen bg-zinc-100">
+        <div className="mx-auto max-w-3xl px-4 py-10">
+          <h1 className="text-xl font-bold">Pedido sendo processado</h1>
+          <p className="text-sm text-zinc-600 mt-2">
+            Seu pedido foi enviado e está sendo registrado.
+            Isso pode levar alguns segundos.
+          </p>
+
+          <button
+            onClick={() => fetchOrder(false)}
+            className="mt-4 rounded-2xl px-4 py-3 text-sm font-bold bg-black text-white"
+          >
+            Recarregar
+          </button>
+        </div>
+      </main>
+    );
+  }
+
   if (err && !order) {
     return (
       <main className="min-h-screen bg-zinc-100">
@@ -206,25 +237,11 @@ export default function OrderTrackingPage({
     );
   }
 
-  if (!order) {
-    return (
-      <main className="min-h-screen bg-zinc-100">
-        <div className="mx-auto max-w-3xl px-4 py-10">
-          <h1 className="text-xl font-bold">Pedido não encontrado</h1>
-          <p className="text-sm text-zinc-600 mt-2">
-            Se você acabou de finalizar, aguarde alguns segundos e tente atualizar.
-          </p>
+  if (!order) return null;
 
-          <button
-            onClick={() => fetchOrder(false)}
-            className="mt-4 rounded-2xl px-4 py-3 text-sm font-bold bg-black text-white"
-          >
-            Atualizar
-          </button>
-        </div>
-      </main>
-    );
-  }
+  /* =========================
+     TELA PRINCIPAL
+     ========================= */
 
   return (
     <main className="min-h-screen bg-zinc-100 pb-10">
@@ -396,13 +413,15 @@ export default function OrderTrackingPage({
           <div className="mt-3 space-y-2">
             {order.customerName ? (
               <p className="text-sm text-zinc-800">
-                <span className="font-bold">Cliente:</span> {order.customerName}
+                <span className="font-bold">Cliente:</span>{" "}
+                {order.customerName}
               </p>
             ) : null}
 
             {order.customerPhone ? (
               <p className="text-sm text-zinc-800">
-                <span className="font-bold">Telefone:</span> {order.customerPhone}
+                <span className="font-bold">Telefone:</span>{" "}
+                {order.customerPhone}
               </p>
             ) : null}
 
