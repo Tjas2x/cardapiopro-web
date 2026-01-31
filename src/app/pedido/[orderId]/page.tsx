@@ -16,11 +16,11 @@ type OrderStatus =
 
 type Order = {
   id: string;
-  restaurantId: string; // <<< ADICIONADO
   status: OrderStatus;
   totalCents: number;
   createdAt: string;
   restaurant: {
+    id: string; // <<< IMPORTANTE
     name: string;
     phone: string | null;
     address: string | null;
@@ -216,7 +216,7 @@ export default function OrderPage() {
       </section>
 
       <a
-        href={`/m/${order.restaurantId}`}
+        href={`/m/${order.restaurant.id}`}
         className="block text-center rounded-xl px-4 py-3 border bg-white font-bold"
       >
         Voltar ao cardápio
@@ -224,4 +224,3 @@ export default function OrderPage() {
     </main>
   );
 }
-
