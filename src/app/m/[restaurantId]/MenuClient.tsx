@@ -358,9 +358,7 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
     return <div className="p-6">Erro ao carregar cardápio</div>;
   }
 
-  const waPhone = restaurant.phone
-    ? sanitizePhoneForWhatsApp(restaurant.phone)
-    : null;
+  
 
   return (
     <div className="min-h-screen bg-zinc-100">
@@ -381,19 +379,8 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
         </div>
       ) : null}
 
-      {/* WhatsApp */}
-      {waPhone ? (
-        <a
-          href={`https://wa.me/${waPhone}?text=${encodeURIComponent(
-            `Olá! Vim pelo cardápio do ${restaurant.name}.`
-          )}`}
-          target="_blank"
-          rel="noreferrer"
-          className="fixed bottom-20 right-4 z-[55] rounded-full px-4 py-3 bg-green-600 text-white font-bold shadow-lg"
-        >
-          WhatsApp
-        </a>
-      ) : null}
+      
+      
 
       {/* HEADER (AJUSTADO) */}
       <header className="sticky top-0 z-10 border-b bg-white/90 backdrop-blur">
@@ -593,8 +580,16 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
         </section>
 
         {/* Dados do cliente */}
-        <section className="rounded-2xl border bg-white p-4 shadow-sm space-y-3">
+        <section
+  id="customer-form"
+  className="rounded-2xl border bg-white p-4 shadow-sm space-y-3"
+>
           <h2 className="text-lg font-bold">Seus dados</h2>
+          {(!customerName || !customerPhone || !customerAddress) && (
+  <div className="bg-yellow-100 text-yellow-800 p-3 rounded-xl text-sm font-semibold">
+    ⚠️ Preencha seus dados para finalizar o pedido
+  </div>
+)}
 
           <div className="space-y-2">
             <input
@@ -623,25 +618,35 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
       </main>
 
       {/* Bottom bar */}
-      <div className="fixed bottom-0 left-0 right-0 border-t bg-white/95 backdrop-blur z-50">
-        <div className="mx-auto max-w-3xl px-4 py-3 flex items-center gap-3">
-          <button
-            onClick={() => setCartOpen(true)}
-            className="flex-1 rounded-2xl px-4 py-3 text-sm font-bold bg-black text-white"
-          >
-            {cartItems.length === 0
-              ? "Abrir carrinho"
-              : `Carrinho • ${cartItems.length} item(s) • ${formatBRL(
-                  totalCents
-                )}`}
-          </button>
+<div className="fixed bottom-0 left-0 right-0 border-t bg-white/95 backdrop-blur z-50">
+  <div className="mx-auto max-w-3xl px-4 py-3 flex items-center gap-3">
+    <button
+      onClick={() => {
+  if (!customerName || !customerPhone || !customerAddress) {
+    showToast("error", "Preencha seus dados antes de continuar");
 
-          <button
-            onClick={refreshSilent}
-            className="rounded-2xl px-4 py-3 text-sm font-bold border bg-white"
-          >
-            Atualizar
-          </button>
+    document.getElementById("customer-form")?.scrollIntoView({
+      behavior: "smooth",
+    });
+
+    return;
+  }
+
+  setCartOpen(true);
+}}
+      className={`flex-1 rounded-2xl px-4 py-4 text-base font-bold shadow-lg ${
+  customerName && customerPhone && customerAddress
+    ? "bg-green-600 text-white"
+    : "bg-gray-400 text-white"
+}`}
+    >
+      {customerName && customerPhone && customerAddress
+  ? cartItems.length === 0
+    ? "🛒 Ver pedido"
+    : `🛒 Ver pedido • ${cartItems.length} item(s) • ${formatBRL(totalCents)}`
+  : "Preencha seus dados para continuar"}
+    </button>
+          
         </div>
       </div>
 
@@ -745,8 +750,7 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
 
                   {paymentMethod === "PIX" ? (
                     <p className="text-xs text-zinc-600 mt-3">
-                      Após enviar o pedido, você pode combinar o pagamento via
-                      WhatsApp.
+                       O restaurante irá preparar seu pedido após o envio e poderá entrar em contato, caso necessário.
                     </p>
                   ) : null}
 
@@ -756,8 +760,11 @@ export default function MenuClient({ restaurantId }: { restaurantId: string }) {
                         Troco para quanto? (opcional)
                       </label>
                       <input
-                        className="w-full rounded-xl border px-3 py-3 text-sm bg-white"
-                        placeholder="Ex: 50,00"
+className={`flex-1 rounded-2xl px-4 py-4 text-base font-bold shadow-lg ${
+  cartItems.length > 0
+    ? "bg-green-600 text-white"
+    : "bg-black text-white"
+}`}                        placeholder="Ex: 50,00"
                         value={cashChangeFor}
                         onChange={(e) => setCashChangeFor(e.target.value)}
                         inputMode="decimal"
